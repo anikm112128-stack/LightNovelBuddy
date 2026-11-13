@@ -46,7 +46,7 @@ input,textarea,select{display:block;width:100%;padding:13px 14px;border:1px soli
 <section id="story" class="page"><div class="card"><div class="eyebrow">EXPLORE WHAT COULD HAPPEN NEXT</div><h2>Interactive Story Development</h2><p>Explore possible directions for your story. You decide what becomes part of the final narrative.</p><label>Current situation</label><textarea id="storySituation" placeholder="Explain what is happening in your story and where your characters stand..."></textarea><label>Your own idea (optional)</label><input id="ownIdea" placeholder="A twist or direction you have in mind..."><button class="action" onclick="runAI('story')">Explore story possibilities</button><div id="storyResult"></div></div></section>
 <footer>Made for storytellers, by storytellers. ✦</footer></main></div><div id="toast"></div>
 <script>
-const API="http://"+location.hostname+":8000";const $=id=>document.getElementById(id);
+const API="https://lightnovelbuddy.onrender.com";const $=id=>document.getElementById(id);
 async function request(path,method="GET",data=null){const options={method,headers:{"Content-Type":"application/json"}};if(data)options.body=JSON.stringify(data);const response=await fetch(API+path,options);let result={};try{result=await response.json()}catch(e){}if(!response.ok)throw new Error(result.detail||"Server returned "+response.status);return result}
 function toast(message){const t=$("toast");t.textContent=message;t.style.display="block";clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>t.style.display="none",3000)}
 function escapeHTML(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
