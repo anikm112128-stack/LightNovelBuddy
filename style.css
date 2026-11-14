@@ -507,4 +507,38 @@ footer {
     .topbar {
         align-items: flex-start;
     }
-  }
+    /* Chapter editor text areas */
+    #chapterTitle,
+    #chapterText {
+       background-color: #F3EEE5;
+       color: #51483F;
+       border: 1px solid #D8CCBB;
+       border-radius: 10px;
+       padding: 14px;
+    }
+
+    /* Placeholder text */
+    #chapterTitle::placeholder,
+    #chapterText::placeholder {
+       color: #918477;
+    }
+
+    /* Saved chapter viewing area */
+    #chapterModalContent {
+       background-color: #F3EEE5;
+       color: #51483F;
+       border: 1px solid #D8CCBB;
+       border-radius: 10px;
+       padding: 18px;
+       line-height: 1.8;
+       white-space: pre-wrap;
+    }
+
+    /* Focus effect */
+    #chapterTitle:focus,
+    #chapterText:focus {
+       outline: none;
+       border-color: #A58B70;
+       box-shadow: 0 0 0 2px rgba(165, 139, 112, 0.15);
+    }
+     }
