@@ -4,10 +4,7 @@ const $ = (id) => document.getElementById(id);
 
 let editingChapterId = null;
 
-
-// ==========================================
 // API REQUEST HANDLER
-// ==========================================
 
 async function request(path, method = "GET", data = null) {
     const options = {
@@ -34,10 +31,7 @@ async function request(path, method = "GET", data = null) {
     return result;
 }
 
-
-// ==========================================
 // NOTIFICATIONS AND UTILITIES
-// ==========================================
 
 function toast(message) {
     const t = $("toast");
@@ -62,10 +56,7 @@ function escapeHTML(value) {
     }[c]));
 }
 
-
-// ==========================================
 // PAGE NAVIGATION
-// ==========================================
 
 function navigate(page) {
     document.querySelectorAll(".page").forEach(p => {
@@ -101,10 +92,7 @@ document.querySelectorAll(".nav").forEach(b => {
     b.addEventListener("click", () => navigate(b.dataset.page));
 });
 
-
-// ==========================================
 // CHAPTER WORD COUNTER
-// ==========================================
 
 $("chapterText").addEventListener("input", () => {
     const count = $("chapterText").value
@@ -115,10 +103,7 @@ $("chapterText").addEventListener("input", () => {
     $("wordCounter").textContent = count + " words";
 });
 
-
-// ==========================================
 // DASHBOARD
-// ==========================================
 
 async function loadDashboard() {
     try {
@@ -147,10 +132,7 @@ async function loadDashboard() {
     }
 }
 
-
-// ==========================================
 // CHAPTER SAVING AND EDITING
-// ==========================================
 
 async function saveChapter() {
     const title = $("chapterTitle").value.trim();
@@ -191,7 +173,6 @@ async function saveChapter() {
     }
 }
 
-
 // Clear the editor and exit editing mode
 
 function resetChapterEditor() {
@@ -208,7 +189,6 @@ function resetChapterEditor() {
     $("editStatus").style.display = "none";
 }
 
-
 // Cancel an ongoing edit
 
 function cancelChapterEdit() {
@@ -223,7 +203,6 @@ function cancelChapterEdit() {
 
     toast("Editing cancelled.");
 }
-
 
 // Load a saved chapter into the editor
 
@@ -264,10 +243,7 @@ async function editChapter(id) {
     }
 }
 
-
-// ==========================================
 // CHAPTER VIEWING
-// ==========================================
 
 async function viewChapter(id) {
     try {
@@ -290,10 +266,7 @@ function closeChapterView() {
     $("chapterModal").classList.remove("open");
 }
 
-
-// ==========================================
 // CHAPTER LIST
-// ==========================================
 
 async function loadChapters() {
     try {
@@ -363,10 +336,7 @@ async function deleteChapter(id) {
     }
 }
 
-
-// ==========================================
 // WORLD BUILDING MEMORY
-// ==========================================
 
 async function addMemory() {
     const name = $("memoryName").value.trim();
@@ -443,10 +413,7 @@ async function deleteMemory(id) {
     }
 }
 
-
-// ==========================================
 // CHARACTER MANAGEMENT
-// ==========================================
 
 async function addCharacter() {
     const name = $("charName").value.trim();
@@ -526,10 +493,7 @@ async function deleteCharacter(id) {
     }
 }
 
-
-// ==========================================
 // AI WRITING TOOLS
-// ==========================================
 
 async function runAI(feature) {
 
@@ -606,10 +570,7 @@ async function runAI(feature) {
     }
 }
 
-
-// ==========================================
 // CHARACTER AI ANALYSIS
-// ==========================================
 
 async function runCharacterAnalysis() {
 
@@ -646,10 +607,7 @@ async function runCharacterAnalysis() {
     }
 }
 
-
-// ==========================================
 // APPLICATION STARTUP
-// ==========================================
 
 async function initialise() {
 
