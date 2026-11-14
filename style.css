@@ -1,4 +1,7 @@
-/* Light Novel Buddy styles...*/: root {
+
+/* Variables */
+
+:root {
     --bg: #F5F0E6;
     --panel: #FFFEFA;
     --green: #526B58;
@@ -14,6 +17,8 @@
     --shadow: 0 8px 28px rgba(52, 72, 61, .055);
 }
 
+/* Global styles */
+
 * {
     box-sizing: border-box;
 }
@@ -25,13 +30,18 @@ body {
     font-family: Georgia, 'Times New Roman', serif;
 }
 
-button, input, textarea, select {
+button,
+input,
+textarea,
+select {
     font: inherit;
 }
 
 button {
     cursor: pointer;
 }
+
+/* Layout */
 
 .app {
     display: flex;
@@ -68,6 +78,16 @@ button {
     margin-top: 5px;
 }
 
+.sidebar-bottom {
+    margin-top: auto;
+    padding: 15px 10px 5px;
+    border-top: 1px solid var(--border);
+    font: 12px Arial;
+    color: var(--muted);
+}
+
+/* Navigation */
+
 .nav-label {
     font: 10px Arial;
     letter-spacing: 1.5px;
@@ -86,18 +106,13 @@ button {
     transition: .2s;
 }
 
-.nav: hover, .nav.active {
+.nav:hover,
+.nav.active {
     background: var(--soft-sage);
     color: var(--dark);
 }
 
-.sidebar-bottom {
-    margin-top: auto;
-    padding: 15px 10px 5px;
-    border-top: 1px solid var(--border);
-    font: 12px Arial;
-    color: var(--muted);
-}
+/* Main content */
 
 .main {
     flex: 1;
@@ -148,6 +163,8 @@ p {
     font-size: 14px;
 }
 
+/* Page transitions */
+
 .page {
     display: none;
     animation: fade .25s ease;
@@ -168,6 +185,8 @@ p {
         transform: translateY(0);
     }
 }
+
+/* Dashboard */
 
 .hero {
     background: linear-gradient(115deg, #E5E9DD, #F2EADF);
@@ -191,6 +210,8 @@ p {
     font-size: 38px;
     margin-bottom: 13px;
 }
+
+/* Cards */
 
 .grid {
     display: grid;
@@ -228,7 +249,11 @@ p {
     margin: 26px 0 13px;
 }
 
-input, textarea, select {
+/* Inputs */
+
+input,
+textarea,
+select {
     display: block;
     width: 100%;
     padding: 13px 14px;
@@ -247,7 +272,9 @@ textarea {
     line-height: 1.65;
 }
 
-textarea: focus, input: focus, select: focus {
+textarea:focus,
+input:focus,
+select:focus {
     border-color: var(--green);
     box-shadow: 0 0 0 3px rgba(82, 107, 88, .1);
 }
@@ -256,6 +283,8 @@ label {
     font: 12px Arial;
     color: var(--muted);
 }
+
+/* Buttons */
 
 .action {
     border: 0;
@@ -267,7 +296,7 @@ label {
     transition: .2s;
 }
 
-.action: hover {
+.action:hover {
     background: var(--dark);
     transform: translateY(-1px);
 }
@@ -296,10 +325,12 @@ label {
     flex-wrap: wrap;
 }
 
-.row>* {
+.row > * {
     flex: 1;
     min-width: 120px;
 }
+
+/* Saved items */
 
 .small {
     font: 12px Arial;
@@ -311,7 +342,7 @@ label {
     border-bottom: 1px solid var(--border);
 }
 
-.item: last-child {
+.item:last-child {
     border-bottom: 0;
 }
 
@@ -336,6 +367,15 @@ label {
     margin-bottom: 8px;
 }
 
+.empty {
+    padding: 22px;
+    text-align: center;
+    color: var(--muted);
+    font: 13px Arial;
+}
+
+/* Features */
+
 .feature-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -359,12 +399,7 @@ label {
     margin-bottom: 0;
 }
 
-.empty {
-    padding: 22px;
-    text-align: center;
-    color: var(--muted);
-    font: 13px Arial;
-}
+/* Chapter actions */
 
 .chapter-actions {
     display: flex;
@@ -390,6 +425,50 @@ label {
     border-radius: 8px;
     font: 12px Arial;
 }
+
+/* Chapter editor */
+
+#chapterTitle,
+#chapterText {
+    background-color: #F3EEE5;
+    color: #51483F;
+    border: 1px solid #D8CCBB;
+    border-radius: 10px;
+    padding: 14px;
+}
+
+#chapterTitle {
+    min-height: auto;
+}
+
+#chapterText {
+    min-height: 350px;
+    line-height: 1.85;
+}
+
+#chapterTitle::placeholder,
+#chapterText::placeholder {
+    color: #918477;
+}
+
+#chapterTitle:focus,
+#chapterText:focus {
+    outline: none;
+    border-color: #A58B70;
+    box-shadow: 0 0 0 3px rgba(165, 139, 112, .15);
+}
+
+.editor-status {
+    display: none;
+    margin: 10px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--soft-sage);
+    font: 12px Arial;
+    color: var(--dark);
+}
+
+/* Chapter viewer */
 
 .chapter-modal {
     display: none;
@@ -417,24 +496,20 @@ label {
 }
 
 .chapter-modal-content {
+    background-color: #F3EEE5;
+    color: #51483F;
+    border: 1px solid #D8CCBB;
+    border-radius: 10px;
+    padding: 20px;
     white-space: pre-wrap;
     line-height: 1.85;
     font: 15px/1.85 Georgia, serif;
-    color: var(--dark);
     max-height: 65vh;
     overflow: auto;
     margin-top: 18px;
 }
 
-.editor-status {
-    display: none;
-    margin: 10px 0;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: var(--soft-sage);
-    font: 12px Arial;
-    color: var(--dark);
-}
+/* AI results */
 
 .result {
     white-space: pre-wrap;
@@ -448,12 +523,16 @@ label {
     color: #495849;
 }
 
+/* Footer */
+
 footer {
     padding: 30px 0;
     text-align: center;
     color: var(--muted);
     font: 11px Arial;
 }
+
+/* Notifications */
 
 #toast {
     position: fixed;
@@ -465,11 +544,14 @@ footer {
     border-radius: 10px;
     font: 13px Arial;
     display: none;
-    z-index: 10;
+    z-index: 30;
     max-width: 90vw;
 }
 
-@media(max-width: 760px) {
+/* Mobile styles */
+
+@media (max-width: 760px) {
+
     .app {
         display: block;
     }
@@ -483,16 +565,16 @@ footer {
     }
 
     .logo {
-        grid-column: 1/-1;
+        grid-column: 1 / -1;
         padding: 5px 8px 12px;
     }
 
     .nav-label {
-        grid-column: 1/-1;
+        grid-column: 1 / -1;
     }
 
     .sidebar-bottom {
-        grid-column: 1/-1;
+        grid-column: 1 / -1;
         margin-top: 8px;
     }
 
@@ -507,38 +589,21 @@ footer {
     .topbar {
         align-items: flex-start;
     }
-    /* Chapter editor text areas */
-    #chapterTitle,
+
+    .chapter-modal {
+        padding: 12px;
+    }
+
+    .chapter-modal-card {
+        padding: 17px;
+    }
+
+    .chapter-modal-content {
+        max-height: 70vh;
+        padding: 15px;
+    }
+
     #chapterText {
-       background-color: #F3EEE5;
-       color: #51483F;
-       border: 1px solid #D8CCBB;
-       border-radius: 10px;
-       padding: 14px;
+        min-height: 300px;
     }
-
-    /* Placeholder text */
-    #chapterTitle::placeholder,
-    #chapterText::placeholder {
-       color: #918477;
-    }
-
-    /* Saved chapter viewing area */
-    #chapterModalContent {
-       background-color: #F3EEE5;
-       color: #51483F;
-       border: 1px solid #D8CCBB;
-       border-radius: 10px;
-       padding: 18px;
-       line-height: 1.8;
-       white-space: pre-wrap;
-    }
-
-    /* Focus effect */
-    #chapterTitle:focus,
-    #chapterText:focus {
-       outline: none;
-       border-color: #A58B70;
-       box-shadow: 0 0 0 2px rgba(165, 139, 112, 0.15);
-    }
-     }
+}
