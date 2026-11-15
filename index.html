@@ -19,52 +19,56 @@
                 <small>YOUR PERSONAL WRITING STUDIO</small>
             </div>
 
-            <div class="nav-label">WORKSPACE</div>
+            <button class="mobile-menu-toggle ghost" id="mobileMenuToggle" type="button" aria-expanded="false" aria-controls="sidebarMenu">Menu</button>
 
-            <button class="nav active" data-page="dashboard">
-                Dashboard
-            </button>
+            <div class="sidebar-menu" id="sidebarMenu">
+                <div class="nav-label">WORKSPACE</div>
 
-            <button class="nav" data-page="editor">
-                Chapter Editor
-            </button>
+                <button class="nav active" data-page="dashboard" aria-current="page">
+                    Dashboard
+                </button>
 
-            <div class="nav-label">YOUR UNIVERSE</div>
+                <button class="nav" data-page="editor">
+                    Chapter Editor
+                </button>
 
-            <button class="nav" data-page="memory">
-                World Memory
-            </button>
+                <div class="nav-label">YOUR UNIVERSE</div>
 
-            <button class="nav" data-page="characters">
-                Characters
-            </button>
+                <button class="nav" data-page="memory">
+                    World Memory
+                </button>
 
-            <div class="nav-label">WRITING ASSISTANTS</div>
+                <button class="nav" data-page="characters">
+                    Characters
+                </button>
 
-            <button class="nav" data-page="grammar">
-                Grammar Assistant
-            </button>
+                <div class="nav-label">WRITING ASSISTANTS</div>
 
-            <button class="nav" data-page="consistency">
-                Consistency Checker
-            </button>
+                <button class="nav" data-page="grammar">
+                    Grammar Assistant
+                </button>
 
-            <button class="nav" data-page="description">
-                Description Assistant
-            </button>
+                <button class="nav" data-page="consistency">
+                    Consistency Checker
+                </button>
 
-            <button class="nav" data-page="story">
-                Story Development
-            </button>
+                <button class="nav" data-page="description">
+                    Description Assistant
+                </button>
 
-            <div class="sidebar-bottom">
-                <div id="backendStatus">
-                    Checking connection...
+                <button class="nav" data-page="story">
+                    Story Development
+                </button>
+
+                <div class="sidebar-bottom">
+                    <div id="backendStatus">
+                        Checking connection...
+                    </div>
+
+                    <p style="font-size:11px">
+                        Your story. Your choices. Your world.
+                    </p>
                 </div>
-
-                <p style="font-size:11px">
-                    Your story. Your choices. Your world.
-                </p>
             </div>
 
         </aside>
@@ -78,7 +82,7 @@
                         A QUIET PLACE FOR BIG IDEAS
                     </div>
 
-                    <h1 id="pageTitle">
+                    <h1 id="pageTitle" tabindex="-1">
                         Welcome, Author.
                     </h1>
                 </div>
@@ -201,11 +205,13 @@
 
                     <input
                         id="chapterTitle"
+                        aria-label="Chapter title"
                         placeholder="Chapter title"
                     >
 
                     <textarea
                         id="chapterText"
+                        aria-label="Chapter text"
                         placeholder="The first sentence of your next chapter..."
                         style="min-height:380px"
                     ></textarea>
@@ -265,14 +271,14 @@
                         Keep track of the details that make your fictional world feel real.
                     </p>
 
-                    <label>Name</label>
+                    <label for="memoryName">Name</label>
 
                     <input
                         id="memoryName"
                         placeholder="e.g. Kingdom of Eldoria"
                     >
 
-                    <label>Category</label>
+                    <label for="memoryCategory">Category</label>
 
                     <select id="memoryCategory">
                         <option>Location</option>
@@ -285,16 +291,17 @@
                         <option>General</option>
                     </select>
 
-                    <label>Description</label>
+                    <label for="memoryDescription">Description</label>
 
                     <textarea
                         id="memoryDescription"
                         placeholder="Write down everything worth remembering..."
                     ></textarea>
 
-                    <button class="action" onclick="addMemory()">
+                    <button class="action" id="saveMemoryButton" onclick="addMemory()">
                         Save to world memory
                     </button>
+                    <button class="ghost" id="cancelMemoryButton" onclick="cancelMemoryEdit()" hidden>Cancel editing</button>
 
                 </div>
 
@@ -327,30 +334,31 @@
                         Give them a past, a purpose and a personality.
                     </p>
 
-                    <label>Character name</label>
+                    <label for="charName">Character name</label>
 
                     <input
                         id="charName"
                         placeholder="Character name"
                     >
 
-                    <label>Personality</label>
+                    <label for="charPersonality">Personality</label>
 
                     <input
                         id="charPersonality"
                         placeholder="e.g. Quiet, curious, stubborn"
                     >
 
-                    <label>Background and details</label>
+                    <label for="charDescription">Background and details</label>
 
                     <textarea
                         id="charDescription"
                         placeholder="History, motivations, goals, abilities and relationships..."
                     ></textarea>
 
-                    <button class="action" onclick="addCharacter()">
+                    <button class="action" id="saveCharacterButton" onclick="addCharacter()">
                         Add character
                     </button>
+                    <button class="ghost" id="cancelCharacterButton" onclick="cancelCharacterEdit()" hidden>Cancel editing</button>
 
                 </div>
 
@@ -364,6 +372,7 @@
 
                     <textarea
                         id="characterAnalysisText"
+                        aria-label="Character information to analyse"
                         placeholder="Describe the character, their current situation or their arc..."
                     ></textarea>
 
@@ -403,10 +412,11 @@
 
                     <textarea
                         id="grammarText"
+                        aria-label="Text to review"
                         placeholder="Paste a paragraph or chapter excerpt here..."
                     ></textarea>
 
-                    <label>Writing style</label>
+                    <label for="grammarMode">Writing style</label>
 
                     <select id="grammarMode">
                         <option value="natural">Natural and fluent</option>
@@ -442,6 +452,7 @@
 
                     <textarea
                         id="consistencyText"
+                        aria-label="Text to check for consistency"
                         placeholder="Paste the chapter or scene you want to check..."
                     ></textarea>
 
@@ -472,10 +483,11 @@
 
                     <textarea
                         id="descriptionText"
+                        aria-label="Description to enrich"
                         placeholder="Describe the scene, place, character or magical ability..."
                     ></textarea>
 
-                    <label>Desired style</label>
+                    <label for="descriptionStyle">Desired style</label>
 
                     <select id="descriptionStyle">
                         <option value="Immersive fantasy">Immersive fantasy</option>
@@ -509,14 +521,14 @@
                         You decide what becomes part of the final narrative.
                     </p>
 
-                    <label>Current situation</label>
+                    <label for="storySituation">Current situation</label>
 
                     <textarea
                         id="storySituation"
                         placeholder="Explain what is happening in your story and where your characters stand..."
                     ></textarea>
 
-                    <label>Your own idea (optional)</label>
+                    <label for="ownIdea">Your own idea (optional)</label>
 
                     <input
                         id="ownIdea"
@@ -546,6 +558,9 @@
     <div
         class="chapter-modal"
         id="chapterModal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="chapterModalTitle"
         onclick="if(event.target===this)closeChapterView()"
     >
 
@@ -557,7 +572,7 @@
                     Chapter
                 </h2>
 
-                <button class="ghost" onclick="closeChapterView()">
+                <button class="ghost" id="closeChapterModal" onclick="closeChapterView()">
                     Close
                 </button>
 
@@ -572,7 +587,7 @@
 
     </div>
 
-    <div id="toast"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
 
     <script src="script.js" defer></script>
 
