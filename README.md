@@ -9,7 +9,7 @@ Built to support the author’s imagination—not take it over.
 
 [![Live app](https://img.shields.io/badge/Live%20App-Visit%20the%20Studio-526B58?style=for-the-badge)](https://lightnovelbuddyf.onrender.com/)
 [![Render API](https://img.shields.io/badge/Render%20API-Explore%20the%20Backend-34483D?style=for-the-badge)](https://lightnovelbuddy.onrender.com/)
-[![MVP walkthrough](https://img.shields.io/badge/YouTube-50%25%20MVP%20Walkthrough-BA5147?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/vfx84i9Vq7c)
+[![MVP walkthrough](https://img.shields.io/badge/YouTube-50%25%20MVP%20Walkthrough-BA5147?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=BRy7R7-objw)
 
 ![HTML](https://img.shields.io/badge/HTML-5-E34F26?style=flat-square&logo=html5&logoColor=white)
 ![CSS](https://img.shields.io/badge/CSS-3-1572B6?style=flat-square&logo=css3&logoColor=white)
@@ -18,7 +18,7 @@ Built to support the author’s imagination—not take it over.
 [![Adaption AI](https://img.shields.io/badge/AI-Adaption-526B58?style=flat-square)](https://pypi.org/project/adaption/)
 [![License](https://img.shields.io/badge/License-Not%20specified-lightgrey?style=flat-square)](#license)
 
-**Team:** Hackholics  |  **Track:** Wildcard — Open Innovation<br>
+**Team:** Hackholics  |  **Track:** Track-1: Storytelling & Co-writers<br>
 **The problem:** Writers need a way to keep growing fictional worlds coherent without giving up their creative voice.
 
 </div>
@@ -91,7 +91,7 @@ The dashboard brings the workspace together. It displays the current number of c
 - Keep newer typing if it is entered while a save is in progress; prevent repeated submissions while that save is pending.
 - Read saved chapters in a keyboard-accessible viewer.
 
-**Draft limitation:** Recovery is stored in browser local storage, not synced across devices. Clearing browser data can remove it, and tabs in the same browser share one draft slot. A saved chapter is stored in the backend database; a local draft is not a backup of that database.
+**Draft limitation:** Recovery is stored in the browser's local storage, not synced across devices. Clearing browser data can remove it, and tabs in the same browser share one draft slot. A saved chapter is stored in the backend database; a local draft is not a backup of that database.
 
 ### 3. World-building memory
 
@@ -99,13 +99,17 @@ The dashboard brings the workspace together. It displays the current number of c
 
 Build a reference library for the details that make a universe feel real. Add a name, category, and description for locations, kingdoms, magic systems, organisations, history, abilities, and other lore. Entries can be edited or deleted as the story changes.
 
-The consistency, description, story-development, and character assistants can use these saved entries as part of their prompts. Adding information is currently **manual**; chapters are not automatically mined for new facts.
+Authors can use these descriptions to record **where the story takes place**, from a single town to an entire fictional realm; **when it takes place**, including important historical events and their order; and **what kind of story it is**, such as a fantasy adventure, mystery, or romance. Keeping those details together gives the author a reference for the setting, timeline, and narrative direction as the world grows.
+
+The consistency, description, story development, and character assistants can use these saved entries as part of their prompts. Adding information is currently **manual**: timelines and story types are written in entry descriptions rather than tracked in dedicated fields, and chapters are not automatically mined for new facts.
 
 ### 4. Character library and development assistant
 
 ![Character development assistant and a saved character profile](screenshots/character-development.png)
 
-Create, update, and remove character profiles with names, personalities, backgrounds, and other details. The character development assistant accepts a character description or situation and asks the AI to consider motivations, strengths, weaknesses, relationships, behaviour, and growth opportunities against the available story context.
+Create, update, and remove character profiles with names, personalities, backgrounds, and other details. Authors can use the profile description to explain **who a character is, the significant role they play in the story, and how they connect to other characters or events**. These details help keep the cast clear as the narrative grows and can give interested readers more context about the overall story when the author shares them.
+
+Within the current shared workspace, anyone viewing the Character Library can read the saved profiles; there is not yet a separate reader-facing page or a dedicated field for a character's story role. The character development assistant also accepts a character description or situation and asks the AI to consider motivations, strengths, weaknesses, relationships, behaviour, and growth opportunities against the available story context.
 
 The assistant offers ideas for the author to review; it does not automatically maintain a relationship graph or an independently tracked character arc.
 
