@@ -273,13 +273,23 @@ document.querySelectorAll(".nav").forEach(b => {
 });
 
 // CHAPTER DRAFTS AND WORD COUNTER
+//
+// Drafts are stored per writing target ("new" or a chapter id) so two tabs on
+// different chapters never share a slot. Each tab also stamps a writer id, which
+// lets a tab notice that another tab changed the same draft.
 
-const CHAPTER_DRAFT_KEY = "lightNovelBuddy.chapterDraft.v1";
+const DRAFT_PREFIX = "lightNovelBuddy.draft.v2.";
+const LEGACY_DRAFT_KEY = "lightNovelBuddy.chapterDraft.v1";
+const TAB_ID = createRequestKey();
+
 let chapterBaseline = { title: "", content: "" };
 let chapterCreateKey = null;
 let chapterSaving = false;
 let chapterLoading = false;
 let storageWarningShown = false;
+let draftConflict = null;
+// Marks where this tab's draft currently lives, so a chapter switch can tidy up.
+let activeDraftSlot = "new";
 
 function chapterValues() {
     return { title: $("chapterTitle").value, content: $("chapterText").value };
@@ -288,6 +298,42 @@ function chapterValues() {
 function chapterIsDirty() {
     const values = chapterValues();
     return values.title !== chapterBaseline.title || values.content !== chapterBaseline.content;
+}
+
+function draftSlotKey(chapterId) {
+    return DRAFT_PREFIX + (chapterId === null ? "new" : String(chapterId));
+}
+
+function readDraft(slot) {
+    try {
+        const raw = localStorage.getItem(draftSlotKey(slot));
+        if (!raw) return null;
+        const draft = JSON.parse(raw);
+        if (typeof draft.title !== "string" || typeof draft.content !== "string" ||
+            !draft.baseline || typeof draft.baseline.title !== "string" || typeof draft.baseline.content !== "string") {
+            return null;
+        }
+        return draft;
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeDraft(slot, payload) {
+    try {
+        localStorage.setItem(draftSlotKey(slot), JSON.stringify(payload));
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function removeDraft(slot) {
+    try {
+        localStorage.removeItem(draftSlotKey(slot));
+    } catch (error) {
+        // Nothing to clean up if storage is unavailable.
+    }
 }
 
 function warnBeforeUnload(event) {
@@ -304,20 +350,32 @@ function updateChapterDraft() {
     if (!dirty && editingChapterId === null) chapterCreateKey = null;
     window.removeEventListener("beforeunload", warnBeforeUnload);
     if (dirty) window.addEventListener("beforeunload", warnBeforeUnload);
-    try {
-        if (dirty) {
-            localStorage.setItem(CHAPTER_DRAFT_KEY, JSON.stringify({
-                chapterId: editingChapterId, baseline: chapterBaseline, createKey: chapterCreateKey, ...values
-            }));
-        } else {
-            localStorage.removeItem(CHAPTER_DRAFT_KEY);
-        }
-    } catch (error) {
-        if (!storageWarningShown && dirty) {
-            storageWarningShown = true;
-            toast("Local draft storage is unavailable. Save your work before leaving.");
-        }
+
+    // The draft belongs to the chapter being edited; move it if that changed.
+    const slot = editingChapterId === null ? "new" : editingChapterId;
+    if (slot !== activeDraftSlot && !dirty) {
+        removeDraft(activeDraftSlot);
+        activeDraftSlot = slot;
     }
+
+    if (!dirty) {
+        removeDraft(slot);
+        return;
+    }
+
+    const saved = writeDraft(slot, {
+        chapterId: editingChapterId,
+        baseline: chapterBaseline,
+        createKey: chapterCreateKey,
+        writer: TAB_ID,
+        updatedAt: Date.now(),
+        ...values
+    });
+    if (!saved && !storageWarningShown) {
+        storageWarningShown = true;
+        toast("Local draft storage is unavailable. Save your work before leaving.");
+    }
+    activeDraftSlot = slot;
 }
 
 function updateChapterEditControls(restored = false) {
@@ -329,32 +387,143 @@ function updateChapterEditControls(restored = false) {
     $("editStatus").style.display = (editingChapterId !== null || restored) ? "block" : "none";
 }
 
-function restoreChapterDraft() {
+function applyDraft(draft) {
+    editingChapterId = draft.chapterId;
+    chapterBaseline = draft.baseline;
+    chapterCreateKey = draft.chapterId === null && typeof draft.createKey === "string" ? draft.createKey : null;
+    $("chapterTitle").value = draft.title;
+    $("chapterText").value = draft.content;
+    activeDraftSlot = draft.chapterId === null ? "new" : draft.chapterId;
+    updateChapterEditControls(true);
+    updateChapterDraft();
+}
+
+/** Migrate the single shared v1 slot into the per-target v2 layout. */
+function migrateLegacyDraft() {
+    let raw;
     try {
-        const raw = localStorage.getItem(CHAPTER_DRAFT_KEY);
-        if (!raw) return;
-        const draft = JSON.parse(raw);
-        if (typeof draft.title !== "string" || typeof draft.content !== "string" ||
-            !draft.baseline || typeof draft.baseline.title !== "string" || typeof draft.baseline.content !== "string" ||
-            !(draft.chapterId === null || (Number.isInteger(draft.chapterId) && draft.chapterId > 0))) {
-            localStorage.removeItem(CHAPTER_DRAFT_KEY);
-            return;
-        }
-        if (draft.title === draft.baseline.title && draft.content === draft.baseline.content) {
-            localStorage.removeItem(CHAPTER_DRAFT_KEY);
-            return;
-        }
-        editingChapterId = draft.chapterId;
-        chapterBaseline = draft.baseline;
-        chapterCreateKey = draft.chapterId === null && typeof draft.createKey === "string" ? draft.createKey : null;
-        $("chapterTitle").value = draft.title;
-        $("chapterText").value = draft.content;
-        updateChapterEditControls(true);
-        updateChapterDraft();
+        raw = localStorage.getItem(LEGACY_DRAFT_KEY);
     } catch (error) {
-        // The editor remains usable if storage is blocked or contains invalid data.
+        return;
+    }
+    if (!raw) return;
+
+    try {
+        const draft = JSON.parse(raw);
+        const valid = typeof draft.title === "string" && typeof draft.content === "string" &&
+            draft.baseline && typeof draft.baseline.title === "string" && typeof draft.baseline.content === "string" &&
+            (draft.chapterId === null || (Number.isInteger(draft.chapterId) && draft.chapterId > 0));
+        if (valid && (draft.title !== draft.baseline.title || draft.content !== draft.baseline.content)) {
+            const slot = draft.chapterId === null ? "new" : draft.chapterId;
+            if (!readDraft(slot)) {
+                writeDraft(slot, { ...draft, writer: TAB_ID, updatedAt: Date.now() });
+            }
+        }
+    } catch (error) {
+        // A corrupt legacy draft is dropped below either way.
+    }
+    try {
+        localStorage.removeItem(LEGACY_DRAFT_KEY);
+    } catch (error) {
+        // Nothing else to do.
     }
 }
+
+function restoreChapterDraft() {
+    migrateLegacyDraft();
+
+    // Any dirty draft from this browser is recoverable; prefer the newest.
+    let best = null;
+    let bestSlot = "new";
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (typeof key !== "string" || !key.startsWith(DRAFT_PREFIX)) continue;
+            const slot = key.slice(DRAFT_PREFIX.length);
+            const draft = readDraft(slot);
+            if (!draft) continue;
+            if (draft.title === draft.baseline.title && draft.content === draft.baseline.content) {
+                removeDraft(slot);
+                continue;
+            }
+            if (!best || Number(draft.updatedAt || 0) > Number(best.updatedAt || 0)) {
+                best = draft;
+                bestSlot = slot;
+            }
+        }
+    } catch (error) {
+        return;
+    }
+    if (!best) return;
+    best.chapterId = bestSlot === "new" ? null : Number(bestSlot);
+    applyDraft(best);
+}
+
+// CROSS-TAB SYNCHRONISATION
+
+function draftSlotOf(draft) {
+    return draft && (draft.chapterId === null || draft.chapterId === undefined)
+        ? "new"
+        : String(draft.chapterId);
+}
+
+function showDraftConflict(draft) {
+    const banner = $("draftConflict");
+    if (!banner) return;
+    const title = (draft.title || "").trim() || "Untitled chapter";
+    banner.querySelector("[data-conflict-text]").textContent =
+        "Another tab saved newer changes to this draft (" + title + "). Loading it will replace what is in this editor.";
+    banner.hidden = false;
+}
+
+function clearDraftConflict() {
+    draftConflict = null;
+    const banner = $("draftConflict");
+    if (banner) banner.hidden = true;
+}
+
+function loadConflictingDraft() {
+    if (!draftConflict) return;
+    const incoming = draftConflict;
+    clearDraftConflict();
+    if (chapterIsDirty() && !confirm("Replace your current unsaved text with the version from the other tab?")) return;
+    applyDraft(incoming);
+    toast("Loaded the draft from the other tab.");
+}
+
+function handleStorageEvent(event) {
+    // localStorage writes in other tabs surface here; ignore our own writes.
+    if (!event.key || !event.key.startsWith(DRAFT_PREFIX)) return;
+    if (!event.newValue) return;
+
+    let incoming;
+    try {
+        incoming = JSON.parse(event.newValue);
+    } catch (error) {
+        return;
+    }
+    if (!incoming || incoming.writer === TAB_ID) return;
+
+    const sameSlot = draftSlotOf(incoming) === draftSlotOf({
+        chapterId: editingChapterId
+    });
+
+    if (sameSlot) {
+        // Only surface a conflict if this tab holds unsaved work of its own.
+        if (!chapterIsDirty()) {
+            applyDraft(incoming);
+            toast("Draft updated from another tab.");
+            return;
+        }
+        draftConflict = incoming;
+        showDraftConflict(incoming);
+        return;
+    }
+
+    toast("Another tab is writing a different chapter. Your draft here is untouched.");
+}
+
+window.addEventListener("storage", handleStorageEvent);
 
 $("chapterTitle").addEventListener("input", updateChapterDraft);
 $("chapterText").addEventListener("input", updateChapterDraft);
@@ -1137,6 +1306,12 @@ async function runAI(feature) {
 
         renderAIResult(out, result.result, result.references);
 
+        if (feature === "story") {
+            storyDirections = parseDirections(result.result);
+            storyQuestions = parseQuestions(result.result);
+            showBrainstormPanel();
+        }
+
     } catch (e) {
 
         out.innerHTML =
@@ -1280,6 +1455,221 @@ function insertIntoEditor(value, button) {
         setTimeout(() => { button.textContent = original; }, 2000);
     }
     toast("Suggestion added to the editor. Nothing is saved until you save the chapter.");
+}
+
+// INTERACTIVE STORY BRAINSTORMING
+//
+// The story endpoint returns prose. Rather than depend on structured JSON from
+// the model, the prose is split into selectable blocks so a failure to follow a
+// format degrades into one big option instead of an error.
+
+let storyDirections = [];
+let storyQuestions = [];
+
+/** Split an AI response into the individual directions it describes. */
+function parseDirections(text) {
+    const value = String(text ?? "").trim();
+    if (!value) return [];
+
+    const lines = value.split(/\r?\n/);
+
+    // A direction starts at a numbered marker ("1.", "2)"), a bullet at the start
+    // of the response, or a markdown heading. Anything else is body text. Being
+    // strict here matters: a loose rule turns every paragraph into an "option".
+    const startsDirection = line => {
+        const trimmed = line.trim();
+        if (!trimmed) return false;
+        if (/^#{1,4}\s+/.test(trimmed)) return true;
+        if (/^\d+[.)]\s+/.test(trimmed)) return true;
+        if (/^[-*•]\s+/.test(trimmed)) return true;
+        return false;
+    };
+
+    const blocks = [];
+    let current = null;
+    let insideQuestions = false;
+
+    lines.forEach(line => {
+        const trimmed = line.trim();
+
+        // The trailing question section is not a direction.
+        if (/^#*\s*questions?\s+to\s+explore/i.test(trimmed)) {
+            insideQuestions = true;
+            return;
+        }
+        if (insideQuestions) return;
+
+        if (startsDirection(line)) {
+            if (current) blocks.push(current);
+            current = { title: trimmed, body: [] };
+        } else if (current) {
+            current.body.push(line);
+        } else if (trimmed) {
+            // Prose before the first marker: keep it as a single fallback option.
+            current = { title: null, body: [line] };
+        }
+    });
+    if (current) blocks.push(current);
+
+    return blocks
+        .map((block, i) => {
+            const body = block.body.join("\n").trim();
+            let title = block.title
+                ? block.title.replace(/^(\d+[.)]|[-*•]|#{1,4})\s*/, "").replace(/\*\*/g, "").trim()
+                : "";
+            if (!title) {
+                const firstLine = (body.split("\n")[0] || "").replace(/\*\*/g, "").trim();
+                title = firstLine.slice(0, 80) || "Direction " + (i + 1);
+            }
+            return { title, body };
+        })
+        .filter(direction => direction.title || direction.body);
+}
+
+/** Pull "Questions to explore further" out of an exploration response. */
+function parseQuestions(text) {
+    const value = String(text ?? "");
+    const match = value.match(/questions?\s+to\s+explore\s+further\s*:?[ \t]*\r?\n([\s\S]*)$/i);
+    if (!match) return [];
+
+    return match[1]
+        .split(/\r?\n/)
+        .map(line => line.replace(/^\s*(?:[-*•]|\d+[.)]|#{1,4})\s*/, "").replace(/\*\*/g, "").trim())
+        .filter(line => line.length > 3)
+        .slice(0, 4);
+}
+
+function renderDirectionOptions() {
+    const holder = $("directionOptions");
+    if (!holder) return;
+    holder.innerHTML = "";
+
+    storyDirections.forEach((direction, index) => {
+        const label = document.createElement("label");
+        label.className = "direction-option";
+
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = String(index);
+        input.className = "direction-checkbox";
+
+        const text = document.createElement("span");
+        text.className = "direction-title";
+        text.textContent = direction.title;
+
+        label.append(input, text);
+        holder.appendChild(label);
+    });
+}
+
+function selectedDirectionIndexes() {
+    return [...document.querySelectorAll(".direction-checkbox:checked")]
+        .map(input => Number(input.value))
+        .filter(index => Number.isInteger(index) && index >= 0 && index < storyDirections.length);
+}
+
+function selectedDirectionsText(withAnswers = true) {
+    const chosen = selectedDirectionIndexes().map(index => {
+        const direction = storyDirections[index];
+        return "- " + direction.title + (direction.body ? "\n  " + direction.body.replace(/\n/g, "\n  ") : "");
+    });
+
+    const answers = withAnswers && $("storyAnswers") ? $("storyAnswers").value.trim() : "";
+    if (answers) chosen.push("\nAuthor's decisions and answers:\n" + answers);
+    return chosen.join("\n");
+}
+
+function showBrainstormPanel() {
+    const panel = $("brainstormPanel");
+    if (!panel) return;
+    panel.hidden = storyDirections.length === 0;
+    renderDirectionOptions();
+
+    const questions = $("storyQuestions");
+    if (questions) {
+        questions.innerHTML = "";
+        if (storyQuestions.length) {
+            const heading = document.createElement("p");
+            heading.className = "result-sources-label";
+            heading.textContent = "Questions to explore further";
+            questions.appendChild(heading);
+
+            const list = document.createElement("ul");
+            list.className = "question-list";
+            storyQuestions.forEach(question => {
+                const item = document.createElement("li");
+                item.textContent = question;
+                list.appendChild(item);
+            });
+            questions.appendChild(list);
+        }
+    }
+}
+
+function resetBrainstorm() {
+    storyDirections = [];
+    storyQuestions = [];
+    const panel = $("brainstormPanel");
+    if (panel) panel.hidden = true;
+    const questions = $("storyQuestions");
+    if (questions) questions.innerHTML = "";
+    const answers = $("storyAnswers");
+    if (answers) answers.value = "";
+    const result = $("storyResult");
+    if (result) result.innerHTML = "";
+}
+
+async function requestStoryRefinement(directionText, button, pendingLabel) {
+    const situation = $("storySituation").value.trim();
+    if (!situation) {
+        toast("Describe the current situation first.");
+        return;
+    }
+    if (!directionText.trim()) {
+        toast("Select at least one direction to develop.");
+        return;
+    }
+
+    if (button) button.disabled = true;
+    const out = $("storyResult");
+    out.innerHTML = '<div class="result">✦ Thinking about your story...</div>';
+
+    try {
+        const result = await request("/api/ai/story", "POST", {
+            text: situation,
+            direction: directionText.slice(0, 4000)
+        });
+
+        storyDirections = parseDirections(result.result);
+        storyQuestions = [];
+        renderAIResult(out, result.result);
+        showBrainstormPanel();
+        toast(pendingLabel);
+    } catch (e) {
+        out.innerHTML = '<div class="result">Something went wrong: ' + escapeHTML(e.message) + '</div>';
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function refineStory() {
+    const indexes = selectedDirectionIndexes();
+    if (!indexes.length) {
+        toast("Select the directions you want to develop.");
+        return;
+    }
+    await requestStoryRefinement(selectedDirectionsText(), $("refineStoryButton"), "Developed the directions you selected.");
+}
+
+async function combineDirections() {
+    const indexes = selectedDirectionIndexes();
+    if (indexes.length < 2) {
+        toast("Select at least two directions to combine.");
+        return;
+    }
+    const combined = "Combine these directions into one coherent possibility, keeping what makes each interesting:\n" +
+        selectedDirectionsText(false);
+    await requestStoryRefinement(combined, $("combineStoryButton"), "Combined the directions you selected.");
 }
 
 // CHARACTER AI ANALYSIS

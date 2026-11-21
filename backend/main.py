@@ -341,7 +341,7 @@ class AIInput(BaseModel):
 
     @field_validator("direction", mode="before")
     @classmethod
-    def check_direction(cls, v): return _clean_text(v, "Direction", strip=True, max_len=500)
+    def check_direction(cls, v): return _clean_text(v, "Direction", strip=True, max_len=4_000)
 
     @field_validator("idea", mode="before")
     @classmethod
@@ -1035,7 +1035,46 @@ def story_development(data: AIInput):
 
     context = get_world_context(data.novel_id)
 
-    instructions = """
+    # `direction` already existed on the schema but was never used. It now carries
+    # the directions the author selected plus any answers to follow-up questions,
+    # so the same endpoint can refine a thread without a second route.
+    refining = bool(data.direction)
+
+    if refining:
+        instructions = """
+You are the interactive story development assistant
+of Light Novel Buddy.
+
+The author has already seen a set of possible directions and has chosen the
+ones that interest them. Your job is to deepen those choices, not to repeat
+them or replace them with unrelated ideas.
+
+Produce up to four refined possibilities drawn from the author's selection.
+For each one:
+- A short title that makes clear which selected direction it develops
+- What happens next
+- How the characters might react
+- A possible consequence for the story
+- One concrete question the author still needs to answer
+
+Respect established lore and character personalities.
+Never decide the final direction for the author.
+Do not write an entire chapter unless explicitly requested.
+"""
+        prompt = f"""
+Established world context:
+{context}
+
+Current story situation:
+{data.text}
+
+The author selected these directions and answered follow-up questions:
+{data.direction}
+
+Develop the selected directions further.
+"""
+    else:
+        instructions = """
 You are the interactive story development assistant
 of Light Novel Buddy.
 
@@ -1052,9 +1091,13 @@ Respect established lore and character personalities.
 
 Never decide the final direction for the author.
 Do not write an entire chapter unless explicitly requested.
-"""
 
-    prompt = f"""
+After the four possibilities, add a section titled "Questions to explore
+further" with two or three open questions about the story, each on its own
+line starting with a dash. These questions are for the author to answer or
+ignore; do not answer them yourself.
+"""
+        prompt = f"""
 Established world context:
 {context}
 
@@ -1069,7 +1112,7 @@ Explore four possible directions.
 
     result = ask_ai(instructions, prompt, data.novel_id)
 
-    return {"result": result}
+    return {"result": result, "mode": "refined" if refining else "explore"}
 
 
 # --------------------------------------------------

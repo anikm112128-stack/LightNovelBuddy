@@ -96,7 +96,9 @@ A word-count goal card lets you set a target between 100 and 1,000,000 words. Th
 
 **Exports:** *Export manuscript* downloads every saved chapter, oldest first, as a single Markdown file with a word count and chapter separators. *Export story bible* downloads the world entries (grouped by category), character profiles, and a chapter index as one reference document. Both are generated in the browser from data the API already returns; nothing extra is stored on the server.
 
-**Draft limitation:** Recovery is stored in the browser's local storage, not synced across devices. Clearing browser data can remove it, and tabs in the same browser share one draft slot. A saved chapter is stored in the backend database; a local draft is not a backup of that database.
+**Draft recovery across tabs:** each chapter keeps its own draft slot, so a new chapter and an edited chapter can be open in two tabs without overwriting each other. If two tabs edit the *same* draft, the second tab is shown a conflict banner offering to load the other tab's version or keep its own; nothing is replaced without the author choosing. Older single-slot drafts are migrated automatically on load.
+
+**Draft limitation:** Recovery is stored in the browser's local storage, not synced across devices. Clearing browser data can remove it. A saved chapter is stored in the backend database; a local draft is not a backup of that database.
 
 ### 3. World-building memory
 
@@ -335,8 +337,8 @@ If Hackholics is selected for the offline hackathon, these are our proposed next
 
 - Explore automatic extraction of world information from chapters, with author review before updates are accepted.
 - Add individual accept/reject controls for writing corrections, and clearer references for consistency feedback. **References done in this branch:** consistency responses now cite tagged saved entries and render resolved source chips; per-correction accept/reject remains future work.
-- Develop more interactive story brainstorming, including follow-up questions and ways to combine directions.
-- Improve draft recovery across tabs and, after sign-in is in place, explore safe cross-device draft sync.
+- ~~Develop more interactive story brainstorming, including follow-up questions and ways to combine directions.~~ **Done in this branch:** after exploring four directions, the author can tick the ones worth developing, answer follow-up questions, ask for a deeper set, or combine several into one. The refined pass reuses the same endpoint through the previously unused `direction` field, so no new route was needed.
+- ~~Improve draft recovery across tabs and, after sign-in is in place, explore safe cross-device draft sync.~~ **Cross-tab recovery done in this branch:** drafts are stored per chapter with a per-tab writer id, and same-draft collisions surface a banner instead of silently overwriting. Cross-device sync still depends on sign-in.
 - ~~Improve local API configuration so developers do not need to edit a hard-coded URL, and document deployment and environment setup more clearly.~~ **Done in this branch:** `config.js` resolves the API base (query parameter, local override file, or browser storage), and the README documents environment variables and Render deployment. PostgreSQL support remains future work.
 
 ### Small bug fixes and hardening
