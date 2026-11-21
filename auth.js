@@ -74,6 +74,24 @@
             loginPassword.value = "";
         }
 
+        // Keep the copy honest: register mode must not leave a stray
+        // "Password" label above a hidden field.
+        if ($("authPasswordLabel")) {
+            $("authPasswordLabel").hidden = enabled;
+        }
+
+        if ($("authHeading")) {
+            $("authHeading").textContent = enabled
+                ? "Create your account."
+                : "Welcome back.";
+        }
+
+        if ($("authSubtitle")) {
+            $("authSubtitle").textContent = enabled
+                ? "One account holds every novel you write."
+                : "Sign in to pick up where your story left off.";
+        }
+
         if (registerPassword) {
             registerPassword.required = enabled;
         }
