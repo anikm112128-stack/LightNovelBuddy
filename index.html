@@ -169,6 +169,10 @@
                     Narrative DNA
                 </button>
 
+                <button class="nav" data-page="emotionRAG">
+                    Emotional Register
+                </button>
+
                 <button class="nav" data-page="relationships">
                     Relationship Web
                 </button>
@@ -950,6 +954,69 @@
                     </p>
 
                     <div id="dnaResult" aria-live="polite"></div>
+
+                </div>
+
+            </section>
+
+            <!-- Emotional Register (retrieval-augmented) -->
+            <section class="page" id="emotionRAG">
+
+                <div class="card">
+
+                    <div class="eyebrow">HOW ARE YOU WRITING THIS?</div>
+
+                    <h2>Emotional Register</h2>
+
+                    <p>
+                        Paste a passage. This page measures the feeling carrying it,
+                        then retrieves the moments in your own saved chapters that
+                        carry the same feeling, and explains your writing against
+                        your own writing. Nothing is measured about you personally:
+                        it reads the words, not the author.
+                    </p>
+
+                    <label for="ragText">Passage to read</label>
+
+                    <textarea
+                        id="ragText"
+                        placeholder="Paste a scene you have just written, or one you are stuck on..."
+                        style="min-height:240px"
+                    ></textarea>
+
+                    <div class="feature-form-grid">
+
+                        <div>
+                            <label for="ragTopK">Passages to retrieve</label>
+                            <select id="ragTopK">
+                                <option value="2">2 — tightest match</option>
+                                <option value="4" selected>4 — balanced</option>
+                                <option value="6">6 — wider net</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="ragScope">Grounding</label>
+                            <select id="ragScope">
+                                <option value="novel" selected>My saved chapters</option>
+                            </select>
+                        </div>
+
+                    </div>
+
+                    <button class="action" id="analyzeRagButton" type="button">
+                        Read this passage
+                    </button>
+
+                    <p class="small" id="ragMessage" role="status">
+                        Measures feeling first, then grounds it in your own chapters.
+                    </p>
+
+                    <div id="ragReading" aria-live="polite"></div>
+
+                    <div id="ragRetrieved"></div>
+
+                    <div class="result" id="ragResult" aria-live="polite" hidden></div>
 
                 </div>
 
