@@ -1,5 +1,7 @@
 
 import os
+import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +30,26 @@ load_dotenv(BASE_DIR / ".env")
 API_KEY = os.getenv("ADAPTION_API_KEY")
 MODEL = os.getenv("ADAPTION_MODEL", "qwen3.5-397b")
 
+DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{BASE_DIR / 'database.db'}"
+if DATABASE_URL.startswith("postgres://"):
+    # Render and Heroku still hand out the legacy scheme; SQLAlchemy needs postgresql://.
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+DEFAULT_ORIGINS = [
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+    "https://lightnovelbuddyf.onrender.com",
+]
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+] or DEFAULT_ORIGINS
+
+engine = create_engine(
+    DATABASE_URL,
+    # check_same_thread is SQLite-only; psycopg rejects it as a connection option.
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     f"sqlite:///{BASE_DIR / 'database.db'}"
@@ -237,11 +259,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-        "https://lightnovelbuddyf.onrender.com"
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -344,6 +362,56 @@ class AIInput(BaseModel):
     direction: str = ""
     idea: str = ""
 
+    @field_validator("text", mode="before")
+    @classmethod
+    def check_text(cls, v): return _clean_text(v, "Text", required=True, max_len=100_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
+    @field_validator("style", mode="before")
+    @classmethod
+    def check_style(cls, v): return _clean_text(v, "Style", strip=True, max_len=200)
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def check_direction(cls, v): return _clean_text(v, "Direction", strip=True, max_len=4_000)
+
+    @field_validator("idea", mode="before")
+    @classmethod
+    def check_idea(cls, v): return _clean_text(v, "Idea", strip=True, max_len=2_000)
+
+
+# --------------------------------------------------
+# 5. DATABASE HELPERS
+# --------------------------------------------------
+
+def normalize_idempotency_key(raw_key: Optional[str]) -> Optional[str]:
+    if raw_key is None:
+        return None
+    cleaned = raw_key.strip()
+    if not cleaned or len(cleaned) > 128 or "\x00" in raw_key:
+        raise HTTPException(status_code=422, detail="Invalid Idempotency-Key header.")
+    return cleaned
+
+
+def save_with_idempotency(db, *, key: Optional[str], endpoint: str, model_cls, create_kwargs: dict, update_fields: dict, message: str):
+    now = int(time.time())
+    if key:
+        db.query(IdempotencyRecord).filter(IdempotencyRecord.created_at < now - 7 * 86400).delete(synchronize_session=False)
+        existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key).first()
+        if existing:
+            if existing.endpoint != endpoint:
+                raise HTTPException(status_code=409, detail="Idempotency-Key already used for another endpoint.")
+            item = db.query(model_cls).filter(model_cls.id == existing.resource_id).first()
+            if item:
+                for attr, val in update_fields.items():
+                    setattr(item, attr, val)
+                db.commit()
+                return {"message": message, "id": item.id}
+            db.delete(existing)
+            db.flush()
 class StoryThreadInput(BaseModel):
     title: str
     first_appearance: str = ""
@@ -403,6 +471,15 @@ def resolve_novel(db, user, novel_id=None):
     return novel
 
 
+def build_world_context(novel_id=1, *, label=False):
+    """Collect saved lore and recent chapters for AI context.
+
+    Returns (context_text, references). When ``label`` is true each block is
+    prefixed with a stable tag such as [W12], [C3] or [CH5] and the matching
+    reference metadata is returned so a caller can resolve what the model cites.
+    """
+
+    refs = {}
 def get_owned_record(db, model, record_id, user, label):
 
     record = db.query(model).filter(
@@ -424,17 +501,50 @@ def get_owned_record(db, model, record_id, user, label):
 
     return record
 
+        def tag(prefix, identifier):
+            return f"[{prefix}{identifier}] " if label else ""
+
+        parts = []
 
 # ==================================================
 # 10. WORLD CONTEXT
 # ==================================================
 
+        for item in memories:
+            if label:
+                refs[f"W{item.id}"] = {
+                    "tag": f"W{item.id}",
+                    "kind": "world",
+                    "id": item.id,
+                    "title": item.name,
+                    "category": item.category,
+                }
+            parts.append(
+                tag("W", item.id) +
+                f"{item.category}: {item.name}\n"
+                f"{item.description}"
+            )
 def get_world_context(db, novel_id):
 
     memories = db.query(MemoryEntry).filter(
         MemoryEntry.novel_id == novel_id
     ).all()
 
+        for character in characters:
+            if label:
+                refs[f"C{character.id}"] = {
+                    "tag": f"C{character.id}",
+                    "kind": "character",
+                    "id": character.id,
+                    "title": character.name,
+                    "category": "Character",
+                }
+            parts.append(
+                tag("C", character.id) +
+                f"Name: {character.name}\n"
+                f"Personality: {character.personality}\n"
+                f"Details: {character.description}"
+            )
     characters = db.query(Character).filter(
         Character.novel_id == novel_id
     ).all()
@@ -445,6 +555,58 @@ def get_world_context(db, novel_id):
         Chapter.id.desc()
     ).limit(10).all()
 
+        for chapter in reversed(chapters):
+            if label:
+                refs[f"CH{chapter.id}"] = {
+                    "tag": f"CH{chapter.id}",
+                    "kind": "chapter",
+                    "id": chapter.id,
+                    "title": chapter.title,
+                    "category": "Chapter",
+                }
+            parts.append(
+                tag("CH", chapter.id) +
+                f"{chapter.title}:\n"
+                f"{(chapter.content or '')[-2500:]}"
+            )
+
+        return "\n\n".join(parts), refs
+
+
+def get_world_context(novel_id=1):
+    """Backward-compatible unlabelled context used by the other assistants."""
+    context, _ = build_world_context(novel_id)
+    return context
+
+
+# --------------------------------------------------
+# 5b. REFERENCE RESOLUTION
+# --------------------------------------------------
+
+# Models sometimes cite a tag that was never in the prompt, or write [W12] as
+# W12 / (W12). Resolve defensively and drop anything that does not correspond to
+# a record the request actually sent, so a hallucinated citation never reaches
+# the author.
+
+_REF_PATTERN = re.compile(r"\[?\b(W|C|CH)(\d+)\b\]?", re.IGNORECASE)
+
+
+def extract_reference_tags(text: str, known: dict) -> list:
+    """Return the tags cited in ``text`` that exist in ``known``, in first-seen order."""
+    if not isinstance(text, str) or not text:
+        return []
+
+    found = []
+    for prefix, identifier in _REF_PATTERN.findall(text):
+        # CH must not be read as C when the model writes CH5.
+        candidate = f"{prefix.upper()}{identifier}"
+        if candidate in known and candidate not in found:
+            found.append(candidate)
+    return found
+
+
+def reference_payload(tags: list, known: dict) -> list:
+    return [known[tag] for tag in tags if tag in known]
     parts = ["ESTABLISHED WORLD INFORMATION:"]
 
     for item in memories:
@@ -1282,6 +1444,8 @@ def consistency_checker(
     user=Depends(get_current_user)
 ):
 
+    # Labelled context so the model can point at the saved record it used.
+    context, known_refs = build_world_context(data.novel_id, label=True)
     with SessionLocal() as db:
         _, context = ai_context(db, user, data.novel_id)
 
@@ -1302,6 +1466,13 @@ Do not invent contradictions.
 If information is insufficient, say so.
 
 For every possible issue:
+1. Quote or identify the relevant passage.
+2. State the tag of the established detail it conflicts with, in square
+   brackets exactly as it appears in the context, for example [W12] or [C3].
+   Use only tags that appear in the context. If no saved entry supports the
+   point, say "no saved entry" instead of inventing a tag.
+3. Explain the conflicting established detail.
+4. Suggest a possible correction.
 1. Identify the relevant passage.
 2. Explain the conflicting established detail.
 3. Suggest a possible correction.
@@ -1319,6 +1490,14 @@ NEW CHAPTER TO CHECK:
 {data.text}
 """
 
+    result = ask_ai(instructions, prompt, data.novel_id)
+
+    # Resolve the citations the model actually used. Anything unknown is dropped.
+    tags = extract_reference_tags(result, known_refs)
+
+    return {
+        "result": result,
+        "references": reference_payload(tags, known_refs),
     return {
         "result": ask_ai(instructions, prompt)
     }
@@ -1385,7 +1564,46 @@ def story_development(
     with SessionLocal() as db:
         _, context = ai_context(db, user, data.novel_id)
 
-    instructions = """
+    # `direction` already existed on the schema but was never used. It now carries
+    # the directions the author selected plus any answers to follow-up questions,
+    # so the same endpoint can refine a thread without a second route.
+    refining = bool(data.direction)
+
+    if refining:
+        instructions = """
+You are the interactive story development assistant
+of Light Novel Buddy.
+
+The author has already seen a set of possible directions and has chosen the
+ones that interest them. Your job is to deepen those choices, not to repeat
+them or replace them with unrelated ideas.
+
+Produce up to four refined possibilities drawn from the author's selection.
+For each one:
+- A short title that makes clear which selected direction it develops
+- What happens next
+- How the characters might react
+- A possible consequence for the story
+- One concrete question the author still needs to answer
+
+Respect established lore and character personalities.
+Never decide the final direction for the author.
+Do not write an entire chapter unless explicitly requested.
+"""
+        prompt = f"""
+Established world context:
+{context}
+
+Current story situation:
+{data.text}
+
+The author selected these directions and answered follow-up questions:
+{data.direction}
+
+Develop the selected directions further.
+"""
+    else:
+        instructions = """
 You are the interactive story development assistant
 of Light Novel Buddy.
 
@@ -1401,9 +1619,13 @@ Respect established lore and character personalities.
 
 Never decide the final direction for the author.
 Do not write an entire chapter unless explicitly requested.
-"""
 
-    prompt = f"""
+After the four possibilities, add a section titled "Questions to explore
+further" with two or three open questions about the story, each on its own
+line starting with a dash. These questions are for the author to answer or
+ignore; do not answer them yourself.
+"""
+        prompt = f"""
 Established world context:
 {context}
 
@@ -1416,6 +1638,9 @@ Author's own idea:
 Explore four possible directions.
 """
 
+    result = ask_ai(instructions, prompt, data.novel_id)
+
+    return {"result": result, "mode": "refined" if refining else "explore"}
     return {
         "result": ask_ai(instructions, prompt)
     }

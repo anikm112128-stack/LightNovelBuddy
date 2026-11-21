@@ -1,4 +1,7 @@
-const API = "https://lightnovelbuddy.onrender.com";
+/* Resolved by config.js (load order: config.js -> script.js -> auth.js). */
+const API = (window.LNB_CONFIG && window.LNB_CONFIG.apiBase)
+    || window.LNB_API
+    || "https://lightnovelbuddy.onrender.com";
 
 const $ = (id) => document.getElementById(id);
 
@@ -228,6 +231,111 @@ function escapeHTML(value) {
     }[c]));
 }
 
+function wordCount(text) {
+    return String(text ?? "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function formatNumber(value) {
+    return Number(value ?? 0).toLocaleString();
+}
+
+/** Save text as a file, falling back to a new tab when downloads are blocked. */
+function downloadTextFile(filename, text, mime = "text/markdown;charset=utf-8") {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Give the browser a moment to start the download before releasing the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function safeFilename(value) {
+    const cleaned = String(value ?? "")
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80);
+    return cleaned || "light-novel-buddy";
+}
+
+// WORD-COUNT GOAL
+
+const GOAL_KEY = "lightNovelBuddy.wordGoal.v1";
+let currentWords = 0;
+
+function readGoal() {
+    try {
+        const raw = Number(localStorage.getItem(GOAL_KEY));
+        return Number.isFinite(raw) && raw >= 100 && raw <= 1000000 ? Math.floor(raw) : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+function renderGoal() {
+    const goal = readGoal();
+    const bar = $("goalBar");
+    const fill = $("goalBarFill");
+    const label = $("goalLabel");
+    if (!bar || !fill || !label) return;
+
+    $("saveGoalButton").textContent = goal ? "Update goal" : "Set goal";
+    $("clearGoalButton").hidden = !goal;
+
+    if (!goal) {
+        bar.setAttribute("aria-valuenow", "0");
+        fill.style.width = "0%";
+        label.textContent = "No goal set yet. " + formatNumber(currentWords) + " words written so far.";
+        $("goalStatus").textContent = "Set a goal and watch the bar fill as you write.";
+        return;
+    }
+
+    const percent = Math.min(100, Math.round((currentWords / goal) * 100));
+    bar.setAttribute("aria-valuenow", String(percent));
+    fill.style.width = percent + "%";
+    fill.classList.toggle("complete", currentWords >= goal);
+
+    const remaining = Math.max(0, goal - currentWords);
+    label.textContent = formatNumber(currentWords) + " of " + formatNumber(goal) + " words (" + percent + "%).";
+    $("goalStatus").textContent = currentWords >= goal
+        ? "Goal reached — " + formatNumber(currentWords) + " words written."
+        : formatNumber(remaining) + " words to go.";
+    $("goalInput").value = String(goal);
+}
+
+function saveGoal() {
+    const input = $("goalInput");
+    const goal = Math.floor(Number(input.value));
+    if (!Number.isFinite(goal) || goal < 100 || goal > 1000000) {
+        toast("Enter a goal between 100 and 1,000,000 words.");
+        return;
+    }
+    try {
+        localStorage.setItem(GOAL_KEY, String(goal));
+    } catch (error) {
+        toast("Could not save the goal in this browser.");
+        return;
+    }
+    renderGoal();
+    toast("Word goal set to " + formatNumber(goal) + " words.");
+}
+
+function clearGoal() {
+    try {
+        localStorage.removeItem(GOAL_KEY);
+    } catch (error) {
+        // Nothing persisted, so there is nothing to clear.
+    }
+    $("goalInput").value = "";
+    renderGoal();
+    toast("Word goal cleared.");
+}
+
 // PAGE NAVIGATION
 
 function setMobileMenu(open) {
@@ -288,13 +396,23 @@ document.querySelectorAll(".nav").forEach(b => {
 });
 
 // CHAPTER DRAFTS AND WORD COUNTER
+//
+// Drafts are stored per writing target ("new" or a chapter id) so two tabs on
+// different chapters never share a slot. Each tab also stamps a writer id, which
+// lets a tab notice that another tab changed the same draft.
 
-const CHAPTER_DRAFT_KEY = "lightNovelBuddy.chapterDraft.v1";
+const DRAFT_PREFIX = "lightNovelBuddy.draft.v2.";
+const LEGACY_DRAFT_KEY = "lightNovelBuddy.chapterDraft.v1";
+const TAB_ID = createRequestKey();
+
 let chapterBaseline = { title: "", content: "" };
 let chapterCreateKey = null;
 let chapterSaving = false;
 let chapterLoading = false;
 let storageWarningShown = false;
+let draftConflict = null;
+// Marks where this tab's draft currently lives, so a chapter switch can tidy up.
+let activeDraftSlot = "new";
 
 function chapterValues() {
     return { title: $("chapterTitle").value, content: $("chapterText").value };
@@ -303,6 +421,42 @@ function chapterValues() {
 function chapterIsDirty() {
     const values = chapterValues();
     return values.title !== chapterBaseline.title || values.content !== chapterBaseline.content;
+}
+
+function draftSlotKey(chapterId) {
+    return DRAFT_PREFIX + (chapterId === null ? "new" : String(chapterId));
+}
+
+function readDraft(slot) {
+    try {
+        const raw = localStorage.getItem(draftSlotKey(slot));
+        if (!raw) return null;
+        const draft = JSON.parse(raw);
+        if (typeof draft.title !== "string" || typeof draft.content !== "string" ||
+            !draft.baseline || typeof draft.baseline.title !== "string" || typeof draft.baseline.content !== "string") {
+            return null;
+        }
+        return draft;
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeDraft(slot, payload) {
+    try {
+        localStorage.setItem(draftSlotKey(slot), JSON.stringify(payload));
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function removeDraft(slot) {
+    try {
+        localStorage.removeItem(draftSlotKey(slot));
+    } catch (error) {
+        // Nothing to clean up if storage is unavailable.
+    }
 }
 
 function warnBeforeUnload(event) {
@@ -319,20 +473,32 @@ function updateChapterDraft() {
     if (!dirty && editingChapterId === null) chapterCreateKey = null;
     window.removeEventListener("beforeunload", warnBeforeUnload);
     if (dirty) window.addEventListener("beforeunload", warnBeforeUnload);
-    try {
-        if (dirty) {
-            localStorage.setItem(CHAPTER_DRAFT_KEY, JSON.stringify({
-                chapterId: editingChapterId, baseline: chapterBaseline, createKey: chapterCreateKey, ...values
-            }));
-        } else {
-            localStorage.removeItem(CHAPTER_DRAFT_KEY);
-        }
-    } catch (error) {
-        if (!storageWarningShown && dirty) {
-            storageWarningShown = true;
-            toast("Local draft storage is unavailable. Save your work before leaving.");
-        }
+
+    // The draft belongs to the chapter being edited; move it if that changed.
+    const slot = editingChapterId === null ? "new" : editingChapterId;
+    if (slot !== activeDraftSlot && !dirty) {
+        removeDraft(activeDraftSlot);
+        activeDraftSlot = slot;
     }
+
+    if (!dirty) {
+        removeDraft(slot);
+        return;
+    }
+
+    const saved = writeDraft(slot, {
+        chapterId: editingChapterId,
+        baseline: chapterBaseline,
+        createKey: chapterCreateKey,
+        writer: TAB_ID,
+        updatedAt: Date.now(),
+        ...values
+    });
+    if (!saved && !storageWarningShown) {
+        storageWarningShown = true;
+        toast("Local draft storage is unavailable. Save your work before leaving.");
+    }
+    activeDraftSlot = slot;
 }
 
 function updateChapterEditControls(restored = false) {
@@ -344,47 +510,228 @@ function updateChapterEditControls(restored = false) {
     $("editStatus").style.display = (editingChapterId !== null || restored) ? "block" : "none";
 }
 
-function restoreChapterDraft() {
+function applyDraft(draft) {
+    editingChapterId = draft.chapterId;
+    chapterBaseline = draft.baseline;
+    chapterCreateKey = draft.chapterId === null && typeof draft.createKey === "string" ? draft.createKey : null;
+    $("chapterTitle").value = draft.title;
+    $("chapterText").value = draft.content;
+    activeDraftSlot = draft.chapterId === null ? "new" : draft.chapterId;
+    updateChapterEditControls(true);
+    updateChapterDraft();
+}
+
+/** Migrate the single shared v1 slot into the per-target v2 layout. */
+function migrateLegacyDraft() {
+    let raw;
     try {
-        const raw = localStorage.getItem(CHAPTER_DRAFT_KEY);
-        if (!raw) return;
-        const draft = JSON.parse(raw);
-        if (typeof draft.title !== "string" || typeof draft.content !== "string" ||
-            !draft.baseline || typeof draft.baseline.title !== "string" || typeof draft.baseline.content !== "string" ||
-            !(draft.chapterId === null || (Number.isInteger(draft.chapterId) && draft.chapterId > 0))) {
-            localStorage.removeItem(CHAPTER_DRAFT_KEY);
-            return;
-        }
-        if (draft.title === draft.baseline.title && draft.content === draft.baseline.content) {
-            localStorage.removeItem(CHAPTER_DRAFT_KEY);
-            return;
-        }
-        editingChapterId = draft.chapterId;
-        chapterBaseline = draft.baseline;
-        chapterCreateKey = draft.chapterId === null && typeof draft.createKey === "string" ? draft.createKey : null;
-        $("chapterTitle").value = draft.title;
-        $("chapterText").value = draft.content;
-        updateChapterEditControls(true);
-        updateChapterDraft();
+        raw = localStorage.getItem(LEGACY_DRAFT_KEY);
     } catch (error) {
-        // The editor remains usable if storage is blocked or contains invalid data.
+        return;
+    }
+    if (!raw) return;
+
+    try {
+        const draft = JSON.parse(raw);
+        const valid = typeof draft.title === "string" && typeof draft.content === "string" &&
+            draft.baseline && typeof draft.baseline.title === "string" && typeof draft.baseline.content === "string" &&
+            (draft.chapterId === null || (Number.isInteger(draft.chapterId) && draft.chapterId > 0));
+        if (valid && (draft.title !== draft.baseline.title || draft.content !== draft.baseline.content)) {
+            const slot = draft.chapterId === null ? "new" : draft.chapterId;
+            if (!readDraft(slot)) {
+                writeDraft(slot, { ...draft, writer: TAB_ID, updatedAt: Date.now() });
+            }
+        }
+    } catch (error) {
+        // A corrupt legacy draft is dropped below either way.
+    }
+    try {
+        localStorage.removeItem(LEGACY_DRAFT_KEY);
+    } catch (error) {
+        // Nothing else to do.
     }
 }
+
+function restoreChapterDraft() {
+    migrateLegacyDraft();
+
+    // Any dirty draft from this browser is recoverable; prefer the newest.
+    let best = null;
+    let bestSlot = "new";
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (typeof key !== "string" || !key.startsWith(DRAFT_PREFIX)) continue;
+            const slot = key.slice(DRAFT_PREFIX.length);
+            const draft = readDraft(slot);
+            if (!draft) continue;
+            if (draft.title === draft.baseline.title && draft.content === draft.baseline.content) {
+                removeDraft(slot);
+                continue;
+            }
+            if (!best || Number(draft.updatedAt || 0) > Number(best.updatedAt || 0)) {
+                best = draft;
+                bestSlot = slot;
+            }
+        }
+    } catch (error) {
+        return;
+    }
+    if (!best) return;
+    best.chapterId = bestSlot === "new" ? null : Number(bestSlot);
+    applyDraft(best);
+}
+
+// CROSS-TAB SYNCHRONISATION
+
+function draftSlotOf(draft) {
+    return draft && (draft.chapterId === null || draft.chapterId === undefined)
+        ? "new"
+        : String(draft.chapterId);
+}
+
+function showDraftConflict(draft) {
+    const banner = $("draftConflict");
+    if (!banner) return;
+    const title = (draft.title || "").trim() || "Untitled chapter";
+    banner.querySelector("[data-conflict-text]").textContent =
+        "Another tab saved newer changes to this draft (" + title + "). Loading it will replace what is in this editor.";
+    banner.hidden = false;
+}
+
+function clearDraftConflict() {
+    draftConflict = null;
+    const banner = $("draftConflict");
+    if (banner) banner.hidden = true;
+}
+
+function loadConflictingDraft() {
+    if (!draftConflict) return;
+    const incoming = draftConflict;
+    clearDraftConflict();
+    if (chapterIsDirty() && !confirm("Replace your current unsaved text with the version from the other tab?")) return;
+    applyDraft(incoming);
+    toast("Loaded the draft from the other tab.");
+}
+
+function handleStorageEvent(event) {
+    // localStorage writes in other tabs surface here; ignore our own writes.
+    if (!event.key || !event.key.startsWith(DRAFT_PREFIX)) return;
+    if (!event.newValue) return;
+
+    let incoming;
+    try {
+        incoming = JSON.parse(event.newValue);
+    } catch (error) {
+        return;
+    }
+    if (!incoming || incoming.writer === TAB_ID) return;
+
+    const sameSlot = draftSlotOf(incoming) === draftSlotOf({
+        chapterId: editingChapterId
+    });
+
+    if (sameSlot) {
+        // Only surface a conflict if this tab holds unsaved work of its own.
+        if (!chapterIsDirty()) {
+            applyDraft(incoming);
+            toast("Draft updated from another tab.");
+            return;
+        }
+        draftConflict = incoming;
+        showDraftConflict(incoming);
+        return;
+    }
+
+    toast("Another tab is writing a different chapter. Your draft here is untouched.");
+}
+
+window.addEventListener("storage", handleStorageEvent);
 
 $("chapterTitle").addEventListener("input", updateChapterDraft);
 $("chapterText").addEventListener("input", updateChapterDraft);
 restoreChapterDraft();
 
-// DASHBOARD
+// KEYBOARD SHORTCUTS
+//
+// The editor card carries a shortcut hint so the keys are discoverable.
+
+function isTypingTarget(element) {
+    if (!element) return false;
+    const tag = element.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || element.isContentEditable;
+}
+
+function saveChapterFromKeyboard() {
+    if ($("editor").classList.contains("active")) {
+        saveChapter();
+        return;
+    }
+    if (!chapterIsDirty()) {
+        toast("Nothing to save — open the Chapter Editor to start writing.");
+        return;
+    }
+    // The draft is already persisted to local storage, so switching pages is safe.
+    navigate("editor");
+    saveChapter();
+}
+
+/** Ctrl/Cmd + Enter runs the assistant for the page currently on screen. */
+const PAGE_ASSISTANT = {
+    grammar: { button: "runGrammarButton", run: () => runAI("grammar") },
+    consistency: { button: "runConsistencyButton", run: () => runAI("consistency") },
+    description: { button: "runDescriptionButton", run: () => runAI("enrich") },
+    story: { button: "runStoryButton", run: () => runAI("story") },
+    characters: { button: "runCharacterButton", run: runCharacterAnalysis }
+};
+
+function runAssistantFromKeyboard() {
+    const page = document.querySelector(".page.active");
+    const assistant = page && PAGE_ASSISTANT[page.id];
+    if (!assistant) {
+        toast("No assistant on this page. Open one from Writing Assistants first.");
+        return;
+    }
+    const button = $(assistant.button);
+    if (button && button.disabled) return;
+    assistant.run();
+}
+
+document.addEventListener("keydown", event => {
+    const modifier = event.ctrlKey || event.metaKey;
+    if (!modifier || event.altKey) return;
+
+    if (event.key === "Enter") {
+        // The chapter viewer handles its own keys; do not fire an assistant behind it.
+        if ($("chapterModal").classList.contains("open")) return;
+        event.preventDefault();
+        runAssistantFromKeyboard();
+        return;
+    }
+
+    if (event.key.toLowerCase() === "s") {
+        // Let the browser handle save-page inside a plain input that is not the editor,
+        // but always take over for chapter writing.
+        if (!$("editor").classList.contains("active") && isTypingTarget(event.target)
+            && event.target !== $("chapterTitle") && event.target !== $("chapterText")) {
+            return;
+        }
+        event.preventDefault();
+        saveChapterFromKeyboard();
+    }
+});
+
 
 async function loadDashboard() {
     try {
         const d = await request("/api/dashboard");
 
+        currentWords = Number(d.words ?? 0);
         $("chapterCount").textContent = d.chapters ?? 0;
-        $("wordCount").textContent = Number(d.words ?? 0).toLocaleString();
+        $("wordCount").textContent = formatNumber(d.words);
         $("characterCount").textContent = d.characters ?? 0;
         $("memoryCount").textContent = d.memories ?? 0;
+        renderGoal();
 
         const chapters = await request("/api/chapters");
 
@@ -516,9 +863,134 @@ async function editChapter(id) {
     }
 }
 
+// EXPORTS
+
+function timestampForFilename() {
+    const now = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+}
+
+function chapterHeadings(chapters) {
+    const numbered = chapters.length > 1 && chapters.every((c, i) => /^\s*(chapter|ch\.?)\s*\d+/i.test(c.title || ""));
+    return chapters.map((c, i) => {
+        const title = (c.title || "Untitled chapter").trim();
+        return numbered ? title : "Chapter " + (i + 1) + ": " + title;
+    });
+}
+
+async function exportManuscript() {
+    const btn = $("exportManuscriptButton");
+    if (btn && btn.disabled) return;
+    if (btn) btn.disabled = true;
+    try {
+        const chapters = await request("/api/chapters");
+        if (!chapters.length) {
+            toast("There are no saved chapters to export yet.");
+            return;
+        }
+
+        // The API returns newest first; a manuscript reads oldest first.
+        const ordered = [...chapters].reverse();
+        const headings = chapterHeadings(ordered);
+        const totalWords = ordered.reduce((sum, c) => sum + wordCount(c.content), 0);
+
+        const parts = [
+            "# Light Novel Buddy manuscript",
+            "",
+            "_Exported " + new Date().toLocaleString() + " — " +
+                ordered.length + " chapter" + (ordered.length === 1 ? "" : "s") + ", " +
+                formatNumber(totalWords) + " words._"
+        ];
+
+        ordered.forEach((chapter, i) => {
+            parts.push("", "---", "", "## " + headings[i], "");
+            const body = (chapter.content || "").trim();
+            parts.push(body || "_(This chapter is empty.)_");
+        });
+
+        downloadTextFile("manuscript-" + timestampForFilename() + ".md", parts.join("\n") + "\n");
+        toast("Manuscript exported — " + ordered.length + " chapters.");
+    } catch (e) {
+        toast("Could not export the manuscript: " + e.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function exportStoryBible() {
+    const btn = $("exportStoryBibleButton");
+    if (btn && btn.disabled) return;
+    if (btn) btn.disabled = true;
+    try {
+        const [memoriesData, charactersData, chapters] = await Promise.all([
+            request("/api/memories"),
+            request("/api/characters"),
+            request("/api/chapters")
+        ]);
+
+        if (!memoriesData.length && !charactersData.length && !chapters.length) {
+            toast("There is nothing to export yet.");
+            return;
+        }
+
+        const parts = ["# Story bible", "", "_Exported " + new Date().toLocaleString() + "_"];
+
+        parts.push("", "## World", "");
+        if (memoriesData.length) {
+            // Group by category so the export reads like a reference document.
+            const byCategory = new Map();
+            memoriesData.forEach(m => {
+                const category = (m.category || "General").trim();
+                if (!byCategory.has(category)) byCategory.set(category, []);
+                byCategory.get(category).push(m);
+            });
+            for (const [category, entries] of byCategory) {
+                parts.push("### " + category, "");
+                entries.forEach(m => {
+                    parts.push("**" + (m.name || "Untitled") + "**", "");
+                    parts.push((m.description || "").trim() || "_(No description.)_", "");
+                });
+            }
+        } else {
+            parts.push("_No world entries saved._", "");
+        }
+
+        parts.push("## Characters", "");
+        if (charactersData.length) {
+            charactersData.forEach(c => {
+                parts.push("### " + (c.name || "Unnamed character"), "");
+                if ((c.personality || "").trim()) parts.push("*Personality:* " + c.personality.trim(), "");
+                parts.push((c.description || "").trim() || "_(No details.)_", "");
+            });
+        } else {
+            parts.push("_No characters saved._", "");
+        }
+
+        parts.push("## Chapter index", "");
+        if (chapters.length) {
+            const ordered = [...chapters].reverse();
+            const headings = chapterHeadings(ordered);
+            ordered.forEach((chapter, i) => {
+                parts.push("- **" + headings[i] + "** — " + formatNumber(wordCount(chapter.content)) + " words");
+            });
+        } else {
+            parts.push("_No chapters saved._");
+        }
+
+        downloadTextFile("story-bible-" + timestampForFilename() + ".md", parts.join("\n") + "\n");
+        toast("Story bible exported.");
+    } catch (e) {
+        toast("Could not export the story bible: " + e.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // CHAPTER VIEWING
 
 let chapterModalPreviousFocus = null;
+let chapterModalId = null;
 
 async function viewChapter(id) {
     try {
@@ -530,6 +1002,7 @@ async function viewChapter(id) {
         $("chapterModalContent").textContent =
             c.content || "(This chapter is empty.)";
 
+        chapterModalId = c.id;
         chapterModalPreviousFocus = document.activeElement;
         if ($("appRoot")) $("appRoot").inert = true;
         $("chapterModal").classList.add("open");
@@ -545,12 +1018,23 @@ function closeChapterView() {
     if ($("appRoot")) $("appRoot").inert = false;
     if (chapterModalPreviousFocus && chapterModalPreviousFocus.isConnected) chapterModalPreviousFocus.focus();
     chapterModalPreviousFocus = null;
+    chapterModalId = null;
+}
+
+/** Jump from the read-only viewer straight into the editor for the same chapter. */
+function editFromModal() {
+    if (chapterModalId === null) return;
+    const id = chapterModalId;
+    closeChapterView();
+    // closeChapterView restores focus to the row that opened the modal; moving on
+    // to the editor afterwards keeps that restore harmless and predictable.
+    editChapter(id);
 }
 document.addEventListener("keydown", event => {
     if ($("chapterModal").classList.contains("open")) {
         if (event.key === "Escape") { event.preventDefault(); closeChapterView(); return; }
         if (event.key === "Tab") {
-            const focusable = [$("closeChapterModal"), $("chapterModalContent")].filter(Boolean);
+            const focusable = [$("editFromModalButton"), $("closeChapterModal"), $("chapterModalContent")].filter(Boolean);
             const idx = focusable.indexOf(document.activeElement);
             event.preventDefault();
             focusable[(idx + (event.shiftKey ? focusable.length - 1 : 1)) % focusable.length].focus();
@@ -1148,10 +1632,13 @@ async function runAI(feature) {
             }
         );
 
-        out.innerHTML =
-            '<div class="result">' +
-            escapeHTML(result.result || "No result returned.") +
-            '</div>';
+        renderAIResult(out, result.result, result.references);
+
+        if (feature === "story") {
+            storyDirections = parseDirections(result.result);
+            storyQuestions = parseQuestions(result.result);
+            showBrainstormPanel();
+        }
 
     } catch (e) {
 
@@ -1163,6 +1650,354 @@ async function runAI(feature) {
     } finally {
         if (btn) btn.disabled = false;
     }
+}
+
+// AI RESULT ACTIONS
+
+/**
+ * Render an AI response with actions for moving it into the author's own draft.
+ * Text stays in textContent so nothing from the model is ever parsed as markup.
+ */
+function renderAIResult(container, text, references = null) {
+    container.innerHTML = "";
+
+    const value = String(text ?? "").trim() || "No result returned.";
+
+    const box = document.createElement("div");
+    box.className = "result";
+
+    // Sources are resolved on the server and only include records the request
+    // actually sent, so every tag shown here points at a real saved entry.
+    if (Array.isArray(references) && references.length) {
+        const sources = document.createElement("div");
+        sources.className = "result-sources";
+
+        const heading = document.createElement("p");
+        heading.className = "result-sources-label";
+        heading.textContent = "Checked against " + references.length +
+            " saved " + (references.length === 1 ? "entry" : "entries");
+        sources.appendChild(heading);
+
+        const list = document.createElement("ul");
+        list.className = "source-list";
+
+        references.forEach(ref => {
+            const item = document.createElement("li");
+            item.className = "source-item";
+
+            const tag = document.createElement("span");
+            tag.className = "source-tag";
+            tag.textContent = String(ref.tag || "");
+
+            const title = document.createElement("span");
+            title.className = "source-title";
+            title.textContent = String(ref.title || "Untitled");
+
+            const category = document.createElement("span");
+            category.className = "source-category";
+            category.textContent = String(ref.category || "");
+
+            item.append(tag, title, category);
+            list.appendChild(item);
+        });
+
+        sources.appendChild(list);
+        box.appendChild(sources);
+    }
+
+    const body = document.createElement("div");
+    body.className = "result-text";
+    body.textContent = value;
+
+    const actions = document.createElement("div");
+    actions.className = "result-actions";
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "ghost";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", () => copyText(value, copy));
+
+    const insert = document.createElement("button");
+    insert.type = "button";
+    insert.className = "ghost";
+    insert.textContent = "Insert into editor";
+    insert.addEventListener("click", () => insertIntoEditor(value, insert));
+
+    actions.append(copy, insert);
+    box.append(body, actions);
+    container.appendChild(box);
+}
+
+async function copyText(value, button) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(value);
+        } else {
+            // Fallback for non-secure contexts, where the async clipboard API is unavailable.
+            const helper = document.createElement("textarea");
+            helper.value = value;
+            helper.setAttribute("readonly", "");
+            helper.style.position = "fixed";
+            helper.style.top = "-1000px";
+            document.body.appendChild(helper);
+            helper.select();
+            const copied = document.execCommand("copy");
+            helper.remove();
+            if (!copied) throw new Error("Copy was blocked by the browser.");
+        }
+        if (button) {
+            const original = button.textContent;
+            button.textContent = "Copied";
+            setTimeout(() => { button.textContent = original; }, 2000);
+        }
+        toast("Copied to clipboard.");
+    } catch (error) {
+        toast("Could not copy: " + error.message);
+    }
+}
+
+function insertIntoEditor(value, button) {
+    const target = $("chapterText");
+    if (!target) return;
+
+    if (chapterIsDirty() || target.value.trim()) {
+        const proceed = confirm("Add this suggestion to the chapter editor? Your current draft text is kept and the suggestion is appended.");
+        if (!proceed) return;
+    }
+
+    // Append rather than replace: the assistant's output is a suggestion, and the
+    // author's existing words must survive by default.
+    const existing = target.value.replace(/\s+$/, "");
+    const separator = existing ? "\n\n" : "";
+    target.value = existing + separator + value;
+
+    navigate("editor");
+    updateChapterDraft();
+    target.focus();
+    target.setSelectionRange(target.value.length, target.value.length);
+
+    if (button) {
+        const original = button.textContent;
+        button.textContent = "Inserted";
+        setTimeout(() => { button.textContent = original; }, 2000);
+    }
+    toast("Suggestion added to the editor. Nothing is saved until you save the chapter.");
+}
+
+// INTERACTIVE STORY BRAINSTORMING
+//
+// The story endpoint returns prose. Rather than depend on structured JSON from
+// the model, the prose is split into selectable blocks so a failure to follow a
+// format degrades into one big option instead of an error.
+
+let storyDirections = [];
+let storyQuestions = [];
+
+/** Split an AI response into the individual directions it describes. */
+function parseDirections(text) {
+    const value = String(text ?? "").trim();
+    if (!value) return [];
+
+    const lines = value.split(/\r?\n/);
+
+    // A direction starts at a numbered marker ("1.", "2)"), a bullet at the start
+    // of the response, or a markdown heading. Anything else is body text. Being
+    // strict here matters: a loose rule turns every paragraph into an "option".
+    const startsDirection = line => {
+        const trimmed = line.trim();
+        if (!trimmed) return false;
+        if (/^#{1,4}\s+/.test(trimmed)) return true;
+        if (/^\d+[.)]\s+/.test(trimmed)) return true;
+        if (/^[-*•]\s+/.test(trimmed)) return true;
+        return false;
+    };
+
+    const blocks = [];
+    let current = null;
+    let insideQuestions = false;
+
+    lines.forEach(line => {
+        const trimmed = line.trim();
+
+        // The trailing question section is not a direction.
+        if (/^#*\s*questions?\s+to\s+explore/i.test(trimmed)) {
+            insideQuestions = true;
+            return;
+        }
+        if (insideQuestions) return;
+
+        if (startsDirection(line)) {
+            if (current) blocks.push(current);
+            current = { title: trimmed, body: [] };
+        } else if (current) {
+            current.body.push(line);
+        } else if (trimmed) {
+            // Prose before the first marker: keep it as a single fallback option.
+            current = { title: null, body: [line] };
+        }
+    });
+    if (current) blocks.push(current);
+
+    return blocks
+        .map((block, i) => {
+            const body = block.body.join("\n").trim();
+            let title = block.title
+                ? block.title.replace(/^(\d+[.)]|[-*•]|#{1,4})\s*/, "").replace(/\*\*/g, "").trim()
+                : "";
+            if (!title) {
+                const firstLine = (body.split("\n")[0] || "").replace(/\*\*/g, "").trim();
+                title = firstLine.slice(0, 80) || "Direction " + (i + 1);
+            }
+            return { title, body };
+        })
+        .filter(direction => direction.title || direction.body);
+}
+
+/** Pull "Questions to explore further" out of an exploration response. */
+function parseQuestions(text) {
+    const value = String(text ?? "");
+    const match = value.match(/questions?\s+to\s+explore\s+further\s*:?[ \t]*\r?\n([\s\S]*)$/i);
+    if (!match) return [];
+
+    return match[1]
+        .split(/\r?\n/)
+        .map(line => line.replace(/^\s*(?:[-*•]|\d+[.)]|#{1,4})\s*/, "").replace(/\*\*/g, "").trim())
+        .filter(line => line.length > 3)
+        .slice(0, 4);
+}
+
+function renderDirectionOptions() {
+    const holder = $("directionOptions");
+    if (!holder) return;
+    holder.innerHTML = "";
+
+    storyDirections.forEach((direction, index) => {
+        const label = document.createElement("label");
+        label.className = "direction-option";
+
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = String(index);
+        input.className = "direction-checkbox";
+
+        const text = document.createElement("span");
+        text.className = "direction-title";
+        text.textContent = direction.title;
+
+        label.append(input, text);
+        holder.appendChild(label);
+    });
+}
+
+function selectedDirectionIndexes() {
+    return [...document.querySelectorAll(".direction-checkbox:checked")]
+        .map(input => Number(input.value))
+        .filter(index => Number.isInteger(index) && index >= 0 && index < storyDirections.length);
+}
+
+function selectedDirectionsText(withAnswers = true) {
+    const chosen = selectedDirectionIndexes().map(index => {
+        const direction = storyDirections[index];
+        return "- " + direction.title + (direction.body ? "\n  " + direction.body.replace(/\n/g, "\n  ") : "");
+    });
+
+    const answers = withAnswers && $("storyAnswers") ? $("storyAnswers").value.trim() : "";
+    if (answers) chosen.push("\nAuthor's decisions and answers:\n" + answers);
+    return chosen.join("\n");
+}
+
+function showBrainstormPanel() {
+    const panel = $("brainstormPanel");
+    if (!panel) return;
+    panel.hidden = storyDirections.length === 0;
+    renderDirectionOptions();
+
+    const questions = $("storyQuestions");
+    if (questions) {
+        questions.innerHTML = "";
+        if (storyQuestions.length) {
+            const heading = document.createElement("p");
+            heading.className = "result-sources-label";
+            heading.textContent = "Questions to explore further";
+            questions.appendChild(heading);
+
+            const list = document.createElement("ul");
+            list.className = "question-list";
+            storyQuestions.forEach(question => {
+                const item = document.createElement("li");
+                item.textContent = question;
+                list.appendChild(item);
+            });
+            questions.appendChild(list);
+        }
+    }
+}
+
+function resetBrainstorm() {
+    storyDirections = [];
+    storyQuestions = [];
+    const panel = $("brainstormPanel");
+    if (panel) panel.hidden = true;
+    const questions = $("storyQuestions");
+    if (questions) questions.innerHTML = "";
+    const answers = $("storyAnswers");
+    if (answers) answers.value = "";
+    const result = $("storyResult");
+    if (result) result.innerHTML = "";
+}
+
+async function requestStoryRefinement(directionText, button, pendingLabel) {
+    const situation = $("storySituation").value.trim();
+    if (!situation) {
+        toast("Describe the current situation first.");
+        return;
+    }
+    if (!directionText.trim()) {
+        toast("Select at least one direction to develop.");
+        return;
+    }
+
+    if (button) button.disabled = true;
+    const out = $("storyResult");
+    out.innerHTML = '<div class="result">✦ Thinking about your story...</div>';
+
+    try {
+        const result = await request("/api/ai/story", "POST", {
+            text: situation,
+            direction: directionText.slice(0, 4000)
+        });
+
+        storyDirections = parseDirections(result.result);
+        storyQuestions = [];
+        renderAIResult(out, result.result);
+        showBrainstormPanel();
+        toast(pendingLabel);
+    } catch (e) {
+        out.innerHTML = '<div class="result">Something went wrong: ' + escapeHTML(e.message) + '</div>';
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function refineStory() {
+    const indexes = selectedDirectionIndexes();
+    if (!indexes.length) {
+        toast("Select the directions you want to develop.");
+        return;
+    }
+    await requestStoryRefinement(selectedDirectionsText(), $("refineStoryButton"), "Developed the directions you selected.");
+}
+
+async function combineDirections() {
+    const indexes = selectedDirectionIndexes();
+    if (indexes.length < 2) {
+        toast("Select at least two directions to combine.");
+        return;
+    }
+    const combined = "Combine these directions into one coherent possibility, keeping what makes each interesting:\n" +
+        selectedDirectionsText(false);
+    await requestStoryRefinement(combined, $("combineStoryButton"), "Combined the directions you selected.");
 }
 
 // CHARACTER AI ANALYSIS
@@ -1190,10 +2025,7 @@ async function runCharacterAnalysis() {
             { text }
         );
 
-        $("characterResult").innerHTML =
-            '<div class="result">' +
-            escapeHTML(result.result || "No result returned.") +
-            '</div>';
+        renderAIResult($("characterResult"), result.result);
 
     } catch (e) {
 
@@ -1217,6 +2049,8 @@ window.addEventListener("online", () => {
 // APPLICATION STARTUP
 
 async function initialise() {
+
+    renderGoal();
 
     try {
 

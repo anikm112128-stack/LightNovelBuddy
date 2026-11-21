@@ -82,6 +82,8 @@ AI suggestions are generated responses, not guaranteed facts. Authors should rev
 
 The dashboard brings the workspace together. It displays the current number of chapters, words, characters, and world entries, along with recently written chapters and a quick path into the editor. It is designed to make a growing project feel approachable rather than overwhelming.
 
+A word-count goal card lets you set a target between 100 and 1,000,000 words. The bar fills as you save chapters, reports how many words remain, and switches to a completed state once the goal is passed. The goal is stored in the browser, so it is per-browser rather than per-account.
+
 ### 2. Chapter editor and draft recovery
 
 ![Chapter editor showing a sample chapter in editing mode](screenshots/chapter-editor.png)
@@ -89,9 +91,14 @@ The dashboard brings the workspace together. It displays the current number of c
 - Write and title chapters with a live word count; save, view, edit, and delete saved chapters.
 - Recover an unsaved chapter draft from the same browser after a reload, and receive a warning before replacing unsaved work.
 - Keep newer typing if it is entered while a save is in progress; prevent repeated submissions while that save is pending.
-- Read saved chapters in a keyboard-accessible viewer.
+- Read saved chapters in a keyboard-accessible viewer, and jump from the viewer straight into editing that chapter.
+- Save with **Ctrl/Cmd + S**. On the assistant pages, **Ctrl/Cmd + Enter** runs the assistant. Both shortcuts are listed in the editor.
 
-**Draft limitation:** Recovery is stored in the browser's local storage, not synced across devices. Clearing browser data can remove it, and tabs in the same browser share one draft slot. A saved chapter is stored in the backend database; a local draft is not a backup of that database.
+**Exports:** *Export manuscript* downloads every saved chapter, oldest first, as a single Markdown file with a word count and chapter separators. *Export story bible* downloads the world entries (grouped by category), character profiles, and a chapter index as one reference document. Both are generated in the browser from data the API already returns; nothing extra is stored on the server.
+
+**Draft recovery across tabs:** each chapter keeps its own draft slot, so a new chapter and an edited chapter can be open in two tabs without overwriting each other. If two tabs edit the *same* draft, the second tab is shown a conflict banner offering to load the other tab's version or keep its own; nothing is replaced without the author choosing. Older single-slot drafts are migrated automatically on load.
+
+**Draft limitation:** Recovery is stored in the browser's local storage, not synced across devices. Clearing browser data can remove it. A saved chapter is stored in the backend database; a local draft is not a backup of that database.
 
 ### 3. World-building memory
 
@@ -118,12 +125,12 @@ The assistant offers ideas for the author to review; it does not automatically m
 | Assistant | What the current MVP does |
 | --- | --- |
 | **Grammar and Writing** | Reviews submitted prose for grammar, spelling, punctuation, readability, dialogue, and flow. Choose natural, formal, descriptive, or simple style. |
-| **Story Consistency** | Sends a submitted passage alongside available saved context and asks the AI to identify possible contradictions and suggest corrections. |
+| **Story Consistency** | Sends a submitted passage alongside available saved context and asks the AI to identify possible contradictions and suggest corrections. Saved entries are tagged (`W` world, `C` character, `CH` chapter) so the AI can cite which one it used; resolved citations appear above the response as source chips. |
 | **Descriptive Writing** | Suggests a richer version of a submitted description using a selected style and available world context. |
 | **Story Development** | Explores four potential next directions from a situation and an optional idea supplied by the author. |
 | **Character Development** | Analyses a submitted character and suggests ways to develop them using available story context. |
 
-The tools display responses for the author to consider; they do not automatically overwrite saved chapters. The interface also includes a collapsible mobile menu, labelled form controls, and a chapter viewer that can be closed with Escape.
+The tools display responses for the author to consider; they do not automatically overwrite saved chapters. Every response has **Copy** and **Insert into editor** actions: inserting appends the suggestion to the current draft as unsaved text, so nothing reaches the database until you save the chapter. The interface also includes a collapsible mobile menu, labelled form controls, and a chapter viewer that can be closed with Escape.
 
 ## How this fits the 50% MVP milestone
 
@@ -150,6 +157,8 @@ flowchart LR
     AI -->|Generated response| API
     API -->|Results and saved data| UI
 ```
+
+**Reference tags:** for the consistency checker only, each saved block in the prompt is prefixed with a stable tag (`[W12]`, `[C3]`, `[CH5]`). The model is asked to cite the tag behind each issue. The backend then resolves those tags against the records it actually sent and returns only matches, so an invented tag such as `[W999]` is dropped rather than shown as a source. If the model cites nothing, the response renders exactly as before. The other four assistants still receive unlabelled context, and their responses keep the original `{ "result": ... }` shape.
 
 **Context boundaries:** The consistency, description, story-development, and character assistants collect all saved world entries and character profiles for the selected novel, plus up to the 10 most recent chapters (the last 2,500 characters of each). The grammar assistant sends the text and requested style without this world-context bundle. The current interface uses the default novel; it does not provide multi-novel selection.
 
@@ -262,19 +271,45 @@ Visit `http://127.0.0.1:8000/api/health` for the health response or `http://127.
 
 ### 4. Point the local frontend at the local backend
 
-**Important:** `script.js` is currently hard-coded to the deployed Render API. Running the frontend unchanged can read or modify the deployed shared database. In your **local working copy only**, change its first line to:
+**Important:** with no override, the frontend talks to the deployed Render API, so running it unchanged can read or modify the deployed shared database. `config.js` resolves the API base at load time, so you never edit `script.js`.
 
-```javascript
-const API = "http://127.0.0.1:8000";
-```
+Highest priority wins:
 
-Then, in another terminal from the repository root, serve the frontend:
+1. `?api=` query parameter — `http://127.0.0.1:5500/?api=http://127.0.0.1:8000`
+2. `window.LNB_API` in a local `config.local.js` (git-ignored, optional):
+
+   ```javascript
+   window.LNB_API = "http://127.0.0.1:8000";
+   ```
+3. `localStorage.setItem("lnb_api_base", "http://127.0.0.1:8000")` — or, from the browser console:
+
+   ```javascript
+   LNB_CONFIG.setApiBase("http://127.0.0.1:8000"); // clear with LNB_CONFIG.setApiBase(null)
+   ```
+4. The deployed URL, used when nothing else is set.
+
+Invalid values (non-http/https, not a URL) are ignored, so a typo cannot brick the app. `LNB_CONFIG.isLocalOverride` reports whether an override is active.
+
+In another terminal from the repository root, serve the frontend:
 
 ```bash
 python -m http.server 5500 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:5500/`. This origin is included in the backend’s current CORS allowlist. Do not commit the local API URL unless intentionally changing the project configuration. The browser tests below mock the **original deployed API URL**, so restore that line before running them.
+Open `http://127.0.0.1:5500/?api=http://127.0.0.1:8000`. That origin is in the backend's default CORS allowlist. The browser tests mock the **deployed API URL**, which stays the default, so no file edit is needed before running them.
+
+### 5. Configuration reference
+
+| Variable | Where | Default | Purpose |
+| --- | --- | --- | --- |
+| `ADAPTION_API_KEY` | backend env | none | Required for live AI. Never commit a real key. |
+| `ADAPTION_MODEL` | backend env | `qwen3.5-397b` | Model used for AI requests. |
+| `DATABASE_URL` | backend env | `sqlite:///backend/database.db` | Any SQLAlchemy URL. `postgres://` is rewritten to `postgresql://`. Set `DATABASE_URL` only where the database is durable. |
+| `ALLOWED_ORIGINS` | backend env | local 5500 + deployed frontend | Comma-separated CORS allowlist; replaces the defaults. |
+| `JWT_SECRET_KEY` | backend env | random per process | Only used once authentication is wired in; a random fallback invalidates tokens on restart. |
+| `LNB_API` / `lnb_api_base` | frontend | deployed API | Local API override, see step 4. |
+
+**Deployment notes (Render):** set the variables above in the service's Environment tab, not in `backend/.env`. A free Render web service has an ephemeral filesystem, so the default SQLite file is recreated on every deploy or restart. Do not point `DATABASE_URL` at a database you are not ready to keep: tables are created at startup with `create_all`, and there are no migrations or backups yet.
 
 ## Testing
 
@@ -301,10 +336,10 @@ If Hackholics is selected for the offline hackathon, these are our proposed next
 ### Minor features and refinements
 
 - Explore automatic extraction of world information from chapters, with author review before updates are accepted.
-- Add individual accept/reject controls for writing corrections and clearer references for consistency feedback.
-- Develop more interactive story brainstorming, including follow-up questions and ways to combine directions.
-- Improve draft recovery across tabs and, after sign-in is in place, explore safe cross-device draft sync.
-- Improve local API configuration so developers do not need to edit a hard-coded URL, and document deployment and environment setup more clearly.
+- Add individual accept/reject controls for writing corrections, and clearer references for consistency feedback. **References done in this branch:** consistency responses now cite tagged saved entries and render resolved source chips; per-correction accept/reject remains future work.
+- ~~Develop more interactive story brainstorming, including follow-up questions and ways to combine directions.~~ **Done in this branch:** after exploring four directions, the author can tick the ones worth developing, answer follow-up questions, ask for a deeper set, or combine several into one. The refined pass reuses the same endpoint through the previously unused `direction` field, so no new route was needed.
+- ~~Improve draft recovery across tabs and, after sign-in is in place, explore safe cross-device draft sync.~~ **Cross-tab recovery done in this branch:** drafts are stored per chapter with a per-tab writer id, and same-draft collisions surface a banner instead of silently overwriting. Cross-device sync still depends on sign-in.
+- ~~Improve local API configuration so developers do not need to edit a hard-coded URL, and document deployment and environment setup more clearly.~~ **Done in this branch:** `config.js` resolves the API base (query parameter, local override file, or browser storage), and the README documents environment variables and Render deployment. PostgreSQL support remains future work.
 
 ### Small bug fixes and hardening
 

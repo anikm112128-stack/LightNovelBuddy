@@ -262,6 +262,62 @@
 
                 </div>
 
+                <div class="card goal-card" id="goalCard">
+
+                    <div class="row goal-row">
+
+                        <div class="goal-copy">
+
+                            <h2>Your word-count goal</h2>
+
+                            <p id="goalStatus" role="status" aria-live="polite">
+                                Set a goal and watch the bar fill as you write.
+                            </p>
+
+                        </div>
+
+                        <div class="goal-controls">
+
+                            <label for="goalInput">Goal</label>
+
+                            <input
+                                id="goalInput"
+                                type="number"
+                                min="100"
+                                max="1000000"
+                                step="100"
+                                inputmode="numeric"
+                                placeholder="e.g. 50000"
+                            >
+
+                            <button class="ghost" id="saveGoalButton" type="button" onclick="saveGoal()">
+                                Set goal
+                            </button>
+
+                            <button class="ghost" id="clearGoalButton" type="button" onclick="clearGoal()" hidden>
+                                Clear
+                            </button>
+
+                        </div>
+
+                    </div>
+
+                    <div
+                        class="goal-bar"
+                        id="goalBar"
+                        role="progressbar"
+                        aria-labelledby="goalLabel"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >
+                        <span class="goal-bar-fill" id="goalBarFill"></span>
+                    </div>
+
+                    <p class="small goal-label" id="goalLabel">No goal set yet.</p>
+
+                </div>
+
                 <div class="section-head">
                     <h2>Your writing toolkit</h2>
                 </div>
@@ -322,6 +378,11 @@
                         Take your time. There's no rush to finish a good story.
                     </p>
 
+                    <p class="shortcut-hint" id="shortcutHint">
+                        Shortcut: <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>S</kbd> saves the chapter.
+                        On assistant pages, <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>Enter</kbd> runs the assistant.
+                    </p>
+
                     <input
                         id="chapterTitle"
                         aria-label="Chapter title"
@@ -335,6 +396,17 @@
                         style="min-height:380px"
                     ></textarea>
 
+                    <div class="draft-conflict" id="draftConflict" role="alert" hidden>
+                        <p data-conflict-text>Another tab has newer changes to this draft.</p>
+                        <button class="ghost" type="button" onclick="loadConflictingDraft()">
+                            Load other tab's draft
+                        </button>
+                        <button class="ghost" type="button" onclick="clearDraftConflict()">
+                            Keep mine
+                        </button>
+                    </div>
+
+                    <div class="editor-status" id="editStatus" role="status" aria-live="polite"></div>
                     <div
                         class="editor-status"
                         id="editStatus"
@@ -371,6 +443,18 @@
 
                 <div class="section-head">
                     <h2>Saved chapters</h2>
+
+                    <div class="head-actions">
+
+                        <button class="ghost" id="exportManuscriptButton" type="button" onclick="exportManuscript()">
+                            Export manuscript (.md)
+                        </button>
+
+                        <button class="ghost" id="exportStoryBibleButton" type="button" onclick="exportStoryBible()">
+                            Export story bible (.md)
+                        </button>
+
+                    </div>
                 </div>
 
                 <div class="card" id="chapterList">
@@ -675,6 +759,46 @@
 
                     <div id="storyResult" aria-live="polite"></div>
 
+                    <!-- Interactive follow-up: select directions, answer questions, refine -->
+                    <div class="brainstorm" id="brainstormPanel" hidden>
+
+                        <div class="section-head">
+                            <h3>Follow up on what interests you</h3>
+                        </div>
+
+                        <p class="small">
+                            Tick the directions you want to develop, add anything you have decided,
+                            then ask for a deeper set. Nothing here changes your story on its own.
+                        </p>
+
+                        <div id="storyQuestions"></div>
+
+                        <fieldset class="direction-picker" id="directionPicker">
+                            <legend class="small">Directions worth developing</legend>
+                            <div id="directionOptions" class="direction-options"></div>
+                        </fieldset>
+
+                        <label for="storyAnswers">Your answers or decisions (optional)</label>
+
+                        <textarea
+                            id="storyAnswers"
+                            placeholder="e.g. I want the betrayal to happen before the festival, and Ash should not know yet..."
+                        ></textarea>
+
+                        <div class="row">
+                            <button class="action" id="refineStoryButton" type="button" onclick="refineStory()">
+                                Develop selected directions
+                            </button>
+                            <button class="ghost" id="combineStoryButton" type="button" onclick="combineDirections()">
+                                Combine selected
+                            </button>
+                            <button class="ghost" id="resetStoryButton" type="button" onclick="resetBrainstorm()">
+                                Start over
+                            </button>
+                        </div>
+
+                    </div>
+
                 </div>
 
             </section>
@@ -893,6 +1017,10 @@
 
     </div>
 
+    </div><!-- /#appRoot -->
+
+    <!-- Chapter viewer: kept outside #appRoot so it stays interactive while the app is inert -->
+
     <!-- Chapter viewer -->
     <div
         class="chapter-modal"
@@ -910,6 +1038,10 @@
                 <h2 id="chapterModalTitle" style="flex:1">
                     Chapter
                 </h2>
+
+                <button class="edit-btn" id="editFromModalButton" type="button" onclick="editFromModal()">
+                    Edit chapter
+                </button>
 
                 <button class="ghost" id="closeChapterModal" onclick="closeChapterView()">
                     Close
@@ -931,6 +1063,9 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
 
+    <script src="config.js"></script>
+    <!-- Optional, git-ignored local override: window.LNB_API = "http://127.0.0.1:8000"; -->
+    <script src="config.local.js" onerror="this.remove()"></script>
     <script src="script.js" defer></script>
     <script src="auth.js" defer></script>
 

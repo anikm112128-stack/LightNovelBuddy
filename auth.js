@@ -1,6 +1,9 @@
 /* Light Novel Buddy authentication and multi-novel management */
 
 (() => {
+    const API = (window.LNB_CONFIG && window.LNB_CONFIG.apiBase)
+        || window.LNB_API
+        || "https://lightnovelbuddy.onrender.com";
     "use strict";
 
     const API = "https://lightnovelbuddy.onrender.com";
