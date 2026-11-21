@@ -253,24 +253,32 @@ function navigate(page) {
     });
 
     const titles = {
-        dashboard: "Welcome, Author.",
-        editor: "Chapter Editor",
-        memory: "World Building Memory",
-        characters: "Character Library",
-        grammar: "Grammar Assistant",
-        consistency: "Consistency Checker",
-        description: "Description Assistant",
-        story: "Story Development"
-    };
+    dashboard: "Welcome, Author.",
+    editor: "Chapter Editor",
+    memory: "World Building Memory",
+    characters: "Character Library",
+    grammar: "Grammar Assistant",
+    consistency: "Consistency Checker",
+    description: "Description Assistant",
+    story: "Story Development",
+    chekhov: "Chekhov's Gun Tracker",
+    narrativeDNA: "Narrative DNA",
+    relationships: "Character Relationship Web"
+};
 
     $("pageTitle").textContent = titles[page] || "Light Novel Buddy";
     setMobileMenu(false);
     if (menuWasOpen && window.matchMedia("(max-width: 760px)").matches) $("pageTitle").focus({ preventScroll: true });
 
     if (page === "dashboard") loadDashboard();
-    if (page === "editor") loadChapters();
-    if (page === "memory") loadMemories();
-    if (page === "characters") loadCharacters();
+if (page === "editor") loadChapters();
+if (page === "memory") loadMemories();
+if (page === "characters") loadCharacters();
+if (page === "chekhov") loadChekhov();
+if (page === "narrativeDNA") {
+    $("dnaResult").innerHTML = "";
+}
+if (page === "relationships") loadRelationships();
 }
 
 document.querySelectorAll(".nav").forEach(b => {
@@ -862,6 +870,212 @@ async function deleteCharacter(id) {
         loadCharacters(); loadDashboard();
     } catch (e) { toast("Could not delete character: " + e.message); }
 }
+
+// CHEKHOV'S GUN TRACKER
+
+async function loadChekhov() {
+    try {
+        const items = await request("/api/chekhov");
+
+        $("chekhovList").innerHTML = items.length
+            ? items.map(item => `
+                <div class="item">
+                    <strong>${escapeHTML(item.title)}</strong>
+                    <span class="tag">${escapeHTML(item.status)}</span>
+                    <p>First appearance: ${escapeHTML(item.first_appearance || "Not specified")}</p>
+                    <p>${escapeHTML(item.notes || "")}</p>
+                    <button class="danger" onclick="deleteChekhov(${Number(item.id)})">
+                        Delete
+                    </button>
+                </div>
+            `).join("")
+            : '<div class="empty">No story threads recorded yet.</div>';
+
+    } catch (e) {
+        renderListError("chekhovList", "Could not load story threads", e, loadChekhov);
+    }
+}
+
+async function addChekhov() {
+    const title = $("chekhovTitle").value.trim();
+
+    if (!title) {
+        toast("Please enter a story element.");
+        return;
+    }
+
+    const button = $("addChekhovButton");
+    button.disabled = true;
+
+    try {
+        await request("/api/chekhov", "POST", {
+            title,
+            first_appearance: $("chekhovChapter").value.trim(),
+            status: $("chekhovStatus").value,
+            notes: $("chekhovNotes").value.trim()
+        });
+
+        $("chekhovTitle").value = "";
+        $("chekhovChapter").value = "";
+        $("chekhovNotes").value = "";
+        $("chekhovMessage").textContent = "Story thread added.";
+
+        toast("Story thread added.");
+        await loadChekhov();
+
+    } catch (e) {
+        $("chekhovMessage").textContent = "Could not add thread: " + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function deleteChekhov(id) {
+    if (!confirm("Delete this story thread?")) return;
+
+    try {
+        await request("/api/chekhov/" + id, "DELETE");
+        toast("Story thread deleted.");
+        await loadChekhov();
+    } catch (e) {
+        toast("Could not delete story thread: " + e.message);
+    }
+}
+
+
+// NARRATIVE DNA
+
+async function analyzeNarrativeDNA() {
+    const button = $("analyzeDNAButton");
+    if (button.disabled) return;
+
+    const scope = $("dnaScope").value;
+    const text = $("dnaText").value.trim();
+
+    if (scope === "excerpt" && !text) {
+        toast("Please enter some writing to analyze.");
+        return;
+    }
+
+    button.disabled = true;
+    $("dnaMessage").textContent = "Analyzing your writing...";
+    $("dnaResult").textContent = "";
+
+    try {
+        const result = await request("/api/ai/narrative-dna", "POST", {
+            text,
+            scope,
+            focus: $("dnaFocus").value
+        });
+
+        $("dnaResult").textContent = result.result || "No analysis returned.";
+        $("dnaMessage").textContent = "Analysis complete.";
+
+    } catch (e) {
+        $("dnaMessage").textContent = "Analysis failed: " + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+
+// CHARACTER RELATIONSHIP WEB
+
+async function loadRelationships() {
+    try {
+        await loadCharacters();
+
+        const from = $("relationshipFrom");
+        const to = $("relationshipTo");
+
+        const options = characters.map(character =>
+            `<option value="${Number(character.id)}">${escapeHTML(character.name)}</option>`
+        ).join("");
+
+        from.innerHTML = '<option value="">Select character</option>' + options;
+        to.innerHTML = '<option value="">Select character</option>' + options;
+
+        const relationships = await request("/api/relationships");
+
+        $("relationshipGraph").innerHTML = relationships.length
+            ? relationships.map(item => `
+                <div class="item">
+                    <strong>${escapeHTML(item.from_name)} → ${escapeHTML(item.to_name)}</strong>
+                    <span class="tag">${escapeHTML(item.relationship_type)}</span>
+                    <p>${escapeHTML(item.notes || "")}</p>
+                    <button class="danger" onclick="deleteRelationship(${Number(item.id)})">
+                        Remove
+                    </button>
+                </div>
+            `).join("")
+            : '<div class="empty">Add relationships to start building your character web.</div>';
+
+    } catch (e) {
+        renderListError(
+            "relationshipGraph",
+            "Could not load relationships",
+            e,
+            loadRelationships
+        );
+    }
+}
+
+async function addRelationship() {
+    const fromId = Number($("relationshipFrom").value);
+    const toId = Number($("relationshipTo").value);
+
+    if (!fromId || !toId) {
+        toast("Select both characters first.");
+        return;
+    }
+
+    if (fromId === toId) {
+        toast("Choose two different characters.");
+        return;
+    }
+
+    const button = $("addRelationshipButton");
+    button.disabled = true;
+
+    try {
+        await request("/api/relationships", "POST", {
+            from_character_id: fromId,
+            to_character_id: toId,
+            relationship_type: $("relationshipType").value,
+            notes: $("relationshipNotes").value.trim()
+        });
+
+        $("relationshipNotes").value = "";
+        $("relationshipMessage").textContent = "Relationship added.";
+
+        toast("Relationship added.");
+        await loadRelationships();
+
+    } catch (e) {
+        $("relationshipMessage").textContent = "Could not add relationship: " + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function deleteRelationship(id) {
+    if (!confirm("Remove this relationship?")) return;
+
+    try {
+        await request("/api/relationships/" + id, "DELETE");
+        toast("Relationship removed.");
+        await loadRelationships();
+    } catch (e) {
+        toast("Could not remove relationship: " + e.message);
+    }
+}
+
+
+// FEATURE BUTTON EVENTS
+
+$("addChekhovButton").addEventListener("click", addChekhov);
+$("analyzeDNAButton").addEventListener("click", analyzeNarrativeDNA);
+$("addRelationshipButton").addEventListener("click", addRelationship);
 
 // AI WRITING TOOLS
 
