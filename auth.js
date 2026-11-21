@@ -10,7 +10,8 @@
 
     const $ = id => document.getElementById(id);
 
-    const token = () => sessionStorage.getItem(TOKEN_KEY);
+    // Keep login sessions across browser restarts.
+    const token = () => localStorage.getItem(TOKEN_KEY);
 
     const selectedNovel = () => {
         const id = Number(localStorage.getItem(NOVEL_KEY));
@@ -23,11 +24,8 @@
 
     let registerMode = false;
 
-    // DISPLAY HELPERS
-
     function showMessage(message, isError = false) {
         const element = $("authMessage");
-
         if (!element) return;
 
         element.textContent = message;
@@ -58,8 +56,6 @@
         }
     }
 
-    // LOGIN / REGISTRATION MODE
-
     function setRegisterMode(enabled) {
         registerMode = enabled;
 
@@ -89,23 +85,12 @@
         );
 
         if (loginButton) loginButton.hidden = enabled;
-
-        if ($("registerSubmit")) {
-            $("registerSubmit").hidden = !enabled;
-        }
-
-        if ($("showRegister")) {
-            $("showRegister").hidden = enabled;
-        }
-
-        if ($("showLogin")) {
-            $("showLogin").hidden = !enabled;
-        }
+        if ($("registerSubmit")) $("registerSubmit").hidden = !enabled;
+        if ($("showRegister")) $("showRegister").hidden = enabled;
+        if ($("showLogin")) $("showLogin").hidden = !enabled;
 
         showMessage("");
     }
-
-    // API REQUESTS
 
     async function apiRequest(path, options = {}) {
         const headers = new Headers(options.headers || {});
@@ -134,14 +119,11 @@
 
             const error = new Error(message);
             error.status = response.status;
-
             throw error;
         }
 
         return body;
     }
-
-    // LOAD USER'S NOVELS
 
     async function loadNovels() {
         const novels = await apiRequest("/api/novels");
@@ -150,9 +132,7 @@
         if (!novels.length) {
             const created = await apiRequest("/api/novels", {
                 method: "POST",
-                body: JSON.stringify({
-                    title: "My Novel"
-                })
+                body: JSON.stringify({ title: "My Novel" })
             });
 
             novels.push(created);
@@ -162,11 +142,7 @@
 
         if (!novels.some(novel => Number(novel.id) === currentId)) {
             currentId = Number(novels[0].id);
-
-            localStorage.setItem(
-                NOVEL_KEY,
-                String(currentId)
-            );
+            localStorage.setItem(NOVEL_KEY, String(currentId));
         }
 
         if (picker) {
@@ -174,10 +150,8 @@
 
             novels.forEach(novel => {
                 const option = document.createElement("option");
-
                 option.value = String(novel.id);
                 option.textContent = novel.title;
-
                 picker.appendChild(option);
             });
 
@@ -186,8 +160,6 @@
 
         return novels;
     }
-
-    // LOGIN
 
     async function login(email, password) {
         const form = new URLSearchParams({
@@ -209,7 +181,7 @@
             throw new Error(body.detail || "Login failed.");
         }
 
-        sessionStorage.setItem(TOKEN_KEY, body.access_token);
+        localStorage.setItem(TOKEN_KEY, body.access_token);
 
         try {
             await apiRequest("/api/auth/me");
@@ -224,29 +196,22 @@
             return body;
 
         } catch (error) {
-            sessionStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(TOKEN_KEY);
             throw error;
         }
     }
 
-    // REGISTRATION
-
     async function register(email, password) {
         await apiRequest("/api/auth/register", {
             method: "POST",
-            body: JSON.stringify({
-                email,
-                password
-            })
+            body: JSON.stringify({ email, password })
         });
 
         return login(email, password);
     }
 
-    // LOGOUT
-
     function logout() {
-        sessionStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(NOVEL_KEY);
 
         showAuth();
@@ -256,8 +221,6 @@
 
         showMessage("You have signed out.");
     }
-
-    // CREATE NOVEL
 
     async function createNovel(title) {
         const cleanTitle = String(title || "").trim();
@@ -269,39 +232,23 @@
 
         const created = await apiRequest("/api/novels", {
             method: "POST",
-            body: JSON.stringify({
-                title: cleanTitle
-            })
+            body: JSON.stringify({ title: cleanTitle })
         });
 
-        localStorage.setItem(
-            NOVEL_KEY,
-            String(created.id)
-        );
+        localStorage.setItem(NOVEL_KEY, String(created.id));
 
         await loadNovels();
-
         window.location.reload();
     }
-
-    // SWITCH NOVEL
 
     function switchNovel(id) {
         const nextId = Number(id);
 
-        if (!Number.isInteger(nextId) || nextId < 1) {
-            return;
-        }
+        if (!Number.isInteger(nextId) || nextId < 1) return;
 
-        localStorage.setItem(
-            NOVEL_KEY,
-            String(nextId)
-        );
-
+        localStorage.setItem(NOVEL_KEY, String(nextId));
         window.location.reload();
     }
-
-    // EXPOSE HELPERS
 
     window.lnbAuth = {
         token,
@@ -314,8 +261,6 @@
         createNovel,
         switchNovel
     };
-
-    // BUTTON EVENTS
 
     $("showRegister")?.addEventListener("click", () => {
         setRegisterMode(true);
@@ -333,15 +278,12 @@
 
     $("newNovelButton")?.addEventListener("click", () => {
         const title = prompt("What would you like to call your new novel?");
-
         if (title === null) return;
 
         createNovel(title).catch(error => {
             alert("Could not create novel: " + error.message);
         });
     });
-
-    // LOGIN FORM SUBMISSION
 
     loginForm?.addEventListener("submit", async event => {
         event.preventDefault();
@@ -400,8 +342,6 @@
         }
     });
 
-    // APPLICATION STARTUP
-
     async function start() {
         setRegisterMode(false);
 
@@ -421,7 +361,7 @@
             }
 
         } catch (error) {
-            sessionStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(TOKEN_KEY);
 
             showAuth();
 
