@@ -1135,7 +1135,7 @@ async function runAI(feature) {
             }
         );
 
-        renderAIResult(out, result.result);
+        renderAIResult(out, result.result, result.references);
 
     } catch (e) {
 
@@ -1155,13 +1155,52 @@ async function runAI(feature) {
  * Render an AI response with actions for moving it into the author's own draft.
  * Text stays in textContent so nothing from the model is ever parsed as markup.
  */
-function renderAIResult(container, text) {
+function renderAIResult(container, text, references = null) {
     container.innerHTML = "";
 
     const value = String(text ?? "").trim() || "No result returned.";
 
     const box = document.createElement("div");
     box.className = "result";
+
+    // Sources are resolved on the server and only include records the request
+    // actually sent, so every tag shown here points at a real saved entry.
+    if (Array.isArray(references) && references.length) {
+        const sources = document.createElement("div");
+        sources.className = "result-sources";
+
+        const heading = document.createElement("p");
+        heading.className = "result-sources-label";
+        heading.textContent = "Checked against " + references.length +
+            " saved " + (references.length === 1 ? "entry" : "entries");
+        sources.appendChild(heading);
+
+        const list = document.createElement("ul");
+        list.className = "source-list";
+
+        references.forEach(ref => {
+            const item = document.createElement("li");
+            item.className = "source-item";
+
+            const tag = document.createElement("span");
+            tag.className = "source-tag";
+            tag.textContent = String(ref.tag || "");
+
+            const title = document.createElement("span");
+            title.className = "source-title";
+            title.textContent = String(ref.title || "Untitled");
+
+            const category = document.createElement("span");
+            category.className = "source-category";
+            category.textContent = String(ref.category || "");
+
+            item.append(tag, title, category);
+            list.appendChild(item);
+        });
+
+        sources.appendChild(list);
+        box.appendChild(sources);
+    }
 
     const body = document.createElement("div");
     body.className = "result-text";

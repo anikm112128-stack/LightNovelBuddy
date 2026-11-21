@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -434,8 +435,15 @@ def get_novel(db, novel_id):
     return novel
 
 
-def get_world_context(novel_id=1):
-    """Collect saved lore and recent chapters for AI context."""
+def build_world_context(novel_id=1, *, label=False):
+    """Collect saved lore and recent chapters for AI context.
+
+    Returns (context_text, references). When ``label`` is true each block is
+    prefixed with a stable tag such as [W12], [C3] or [CH5] and the matching
+    reference metadata is returned so a caller can resolve what the model cites.
+    """
+
+    refs = {}
 
     with SessionLocal() as db:
         get_novel(db, novel_id)
@@ -454,12 +462,24 @@ def get_world_context(novel_id=1):
             Chapter.id.desc()
         ).limit(10).all()
 
+        def tag(prefix, identifier):
+            return f"[{prefix}{identifier}] " if label else ""
+
         parts = []
 
         parts.append("ESTABLISHED WORLD INFORMATION:")
 
         for item in memories:
+            if label:
+                refs[f"W{item.id}"] = {
+                    "tag": f"W{item.id}",
+                    "kind": "world",
+                    "id": item.id,
+                    "title": item.name,
+                    "category": item.category,
+                }
             parts.append(
+                tag("W", item.id) +
                 f"{item.category}: {item.name}\n"
                 f"{item.description}"
             )
@@ -467,7 +487,16 @@ def get_world_context(novel_id=1):
         parts.append("\nCHARACTERS:")
 
         for character in characters:
+            if label:
+                refs[f"C{character.id}"] = {
+                    "tag": f"C{character.id}",
+                    "kind": "character",
+                    "id": character.id,
+                    "title": character.name,
+                    "category": "Character",
+                }
             parts.append(
+                tag("C", character.id) +
                 f"Name: {character.name}\n"
                 f"Personality: {character.personality}\n"
                 f"Details: {character.description}"
@@ -476,12 +505,57 @@ def get_world_context(novel_id=1):
         parts.append("\nRECENT CHAPTERS:")
 
         for chapter in reversed(chapters):
+            if label:
+                refs[f"CH{chapter.id}"] = {
+                    "tag": f"CH{chapter.id}",
+                    "kind": "chapter",
+                    "id": chapter.id,
+                    "title": chapter.title,
+                    "category": "Chapter",
+                }
             parts.append(
+                tag("CH", chapter.id) +
                 f"{chapter.title}:\n"
                 f"{(chapter.content or '')[-2500:]}"
             )
 
-        return "\n\n".join(parts)
+        return "\n\n".join(parts), refs
+
+
+def get_world_context(novel_id=1):
+    """Backward-compatible unlabelled context used by the other assistants."""
+    context, _ = build_world_context(novel_id)
+    return context
+
+
+# --------------------------------------------------
+# 5b. REFERENCE RESOLUTION
+# --------------------------------------------------
+
+# Models sometimes cite a tag that was never in the prompt, or write [W12] as
+# W12 / (W12). Resolve defensively and drop anything that does not correspond to
+# a record the request actually sent, so a hallucinated citation never reaches
+# the author.
+
+_REF_PATTERN = re.compile(r"\[?\b(W|C|CH)(\d+)\b\]?", re.IGNORECASE)
+
+
+def extract_reference_tags(text: str, known: dict) -> list:
+    """Return the tags cited in ``text`` that exist in ``known``, in first-seen order."""
+    if not isinstance(text, str) or not text:
+        return []
+
+    found = []
+    for prefix, identifier in _REF_PATTERN.findall(text):
+        # CH must not be read as C when the model writes CH5.
+        candidate = f"{prefix.upper()}{identifier}"
+        if candidate in known and candidate not in found:
+            found.append(candidate)
+    return found
+
+
+def reference_payload(tags: list, known: dict) -> list:
+    return [known[tag] for tag in tags if tag in known]
 
 
 # --------------------------------------------------
@@ -856,7 +930,8 @@ Text to review:
 @app.post("/api/ai/consistency")
 def consistency_checker(data: AIInput):
 
-    context = get_world_context(data.novel_id)
+    # Labelled context so the model can point at the saved record it used.
+    context, known_refs = build_world_context(data.novel_id, label=True)
 
     instructions = """
 You are the story consistency checker of Light Novel Buddy.
@@ -876,8 +951,12 @@ If information is insufficient, say so.
 
 For every possible issue:
 1. Quote or identify the relevant passage.
-2. Explain the conflicting established detail.
-3. Suggest a possible correction.
+2. State the tag of the established detail it conflicts with, in square
+   brackets exactly as it appears in the context, for example [W12] or [C3].
+   Use only tags that appear in the context. If no saved entry supports the
+   point, say "no saved entry" instead of inventing a tag.
+3. Explain the conflicting established detail.
+4. Suggest a possible correction.
 
 Do not rewrite the chapter automatically.
 """
@@ -894,7 +973,13 @@ NEW CHAPTER TO CHECK:
 
     result = ask_ai(instructions, prompt, data.novel_id)
 
-    return {"result": result}
+    # Resolve the citations the model actually used. Anything unknown is dropped.
+    tags = extract_reference_tags(result, known_refs)
+
+    return {
+        "result": result,
+        "references": reference_payload(tags, known_refs),
+    }
 
 
 # --------------------------------------------------

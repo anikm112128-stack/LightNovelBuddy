@@ -575,6 +575,63 @@ label {
     overflow-wrap: anywhere;
 }
 
+/* Resolved consistency sources */
+
+.result-sources {
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.result-sources-label {
+    margin: 0 0 9px;
+    font: 11px/1.5 Arial;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.source-list {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin: 0;
+    padding: 0;
+}
+
+.source-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 11px 5px 5px;
+    max-width: 100%;
+}
+
+.source-tag {
+    font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--soft-sage);
+    color: var(--green);
+    border-radius: 12px;
+    padding: 2px 7px;
+    flex-shrink: 0;
+}
+
+.source-title {
+    font: 12px Arial;
+    color: var(--dark);
+    overflow-wrap: anywhere;
+}
+
+.source-category {
+    font: 10px Arial;
+    color: var(--muted);
+    flex-shrink: 0;
+}
+
 .result-actions {
     display: flex;
     gap: 8px;

@@ -123,7 +123,7 @@ The assistant offers ideas for the author to review; it does not automatically m
 | Assistant | What the current MVP does |
 | --- | --- |
 | **Grammar and Writing** | Reviews submitted prose for grammar, spelling, punctuation, readability, dialogue, and flow. Choose natural, formal, descriptive, or simple style. |
-| **Story Consistency** | Sends a submitted passage alongside available saved context and asks the AI to identify possible contradictions and suggest corrections. |
+| **Story Consistency** | Sends a submitted passage alongside available saved context and asks the AI to identify possible contradictions and suggest corrections. Saved entries are tagged (`W` world, `C` character, `CH` chapter) so the AI can cite which one it used; resolved citations appear above the response as source chips. |
 | **Descriptive Writing** | Suggests a richer version of a submitted description using a selected style and available world context. |
 | **Story Development** | Explores four potential next directions from a situation and an optional idea supplied by the author. |
 | **Character Development** | Analyses a submitted character and suggests ways to develop them using available story context. |
@@ -155,6 +155,8 @@ flowchart LR
     AI -->|Generated response| API
     API -->|Results and saved data| UI
 ```
+
+**Reference tags:** for the consistency checker only, each saved block in the prompt is prefixed with a stable tag (`[W12]`, `[C3]`, `[CH5]`). The model is asked to cite the tag behind each issue. The backend then resolves those tags against the records it actually sent and returns only matches, so an invented tag such as `[W999]` is dropped rather than shown as a source. If the model cites nothing, the response renders exactly as before. The other four assistants still receive unlabelled context, and their responses keep the original `{ "result": ... }` shape.
 
 **Context boundaries:** The consistency, description, story-development, and character assistants collect all saved world entries and character profiles for the selected novel, plus up to the 10 most recent chapters (the last 2,500 characters of each). The grammar assistant sends the text and requested style without this world-context bundle. The current interface uses the default novel; it does not provide multi-novel selection.
 
@@ -332,7 +334,7 @@ If Hackholics is selected for the offline hackathon, these are our proposed next
 ### Minor features and refinements
 
 - Explore automatic extraction of world information from chapters, with author review before updates are accepted.
-- Add individual accept/reject controls for writing corrections and clearer references for consistency feedback.
+- Add individual accept/reject controls for writing corrections, and clearer references for consistency feedback. **References done in this branch:** consistency responses now cite tagged saved entries and render resolved source chips; per-correction accept/reject remains future work.
 - Develop more interactive story brainstorming, including follow-up questions and ways to combine directions.
 - Improve draft recovery across tabs and, after sign-in is in place, explore safe cross-device draft sync.
 - ~~Improve local API configuration so developers do not need to edit a hard-coded URL, and document deployment and environment setup more clearly.~~ **Done in this branch:** `config.js` resolves the API base (query parameter, local override file, or browser storage), and the README documents environment variables and Render deployment. PostgreSQL support remains future work.
