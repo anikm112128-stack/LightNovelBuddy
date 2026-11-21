@@ -1,4 +1,7 @@
-const API = "https://lightnovelbuddy.onrender.com";
+/* Resolved by config.js (load order: config.js -> script.js -> auth.js). */
+const API = (window.LNB_CONFIG && window.LNB_CONFIG.apiBase)
+    || window.LNB_API
+    || "https://lightnovelbuddy.onrender.com";
 
 const $ = (id) => document.getElementById(id);
 

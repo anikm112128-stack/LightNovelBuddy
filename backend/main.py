@@ -30,11 +30,26 @@ load_dotenv(BASE_DIR / ".env")
 API_KEY = os.getenv("ADAPTION_API_KEY")
 MODEL = os.getenv("ADAPTION_MODEL", "qwen3.5-397b")
 
-DATABASE_URL = f"sqlite:///{BASE_DIR / 'database.db'}"
+DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{BASE_DIR / 'database.db'}"
+if DATABASE_URL.startswith("postgres://"):
+    # Render and Heroku still hand out the legacy scheme; SQLAlchemy needs postgresql://.
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+DEFAULT_ORIGINS = [
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+    "https://lightnovelbuddyf.onrender.com",
+]
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+] or DEFAULT_ORIGINS
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False}
+    # check_same_thread is SQLite-only; psycopg rejects it as a connection option.
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 )
 
 SessionLocal = sessionmaker(
@@ -142,11 +157,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-        "https://lightnovelbuddyf.onrender.com"
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

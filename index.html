@@ -601,7 +601,9 @@
 
     </div>
 
-    <!-- Chapter viewer -->
+    </div><!-- /#appRoot -->
+
+    <!-- Chapter viewer: kept outside #appRoot so it stays interactive while the app is inert -->
 
     <div
         class="chapter-modal"
@@ -640,7 +642,10 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
 
-   <script src="script.js" defer></script>
+    <script src="config.js"></script>
+    <!-- Optional, git-ignored local override: window.LNB_API = "http://127.0.0.1:8000"; -->
+    <script src="config.local.js" onerror="this.remove()"></script>
+    <script src="script.js" defer></script>
     <script src="auth.js" defer></script>
 
 </body>

@@ -6,4 +6,5 @@ python-dotenv
 pydantic
 python-jose[cryptography]
 python-multipart
+psycopg[binary]>=3.1
 email-validator
