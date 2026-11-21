@@ -149,6 +149,49 @@ class Character(Base):
         back_populates="characters"
     )
 
+class StoryThread(Base):
+    __tablename__ = "story_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    first_appearance = Column(String, default="")
+    status = Column(String, default="planted")
+    notes = Column(Text, default="")
+
+    novel_id = Column(
+        Integer,
+        ForeignKey("novels.id"),
+        nullable=False,
+        index=True
+    )
+
+
+class CharacterRelationship(Base):
+    __tablename__ = "character_relationships"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    novel_id = Column(
+        Integer,
+        ForeignKey("novels.id"),
+        nullable=False,
+        index=True
+    )
+
+    from_character_id = Column(
+        Integer,
+        ForeignKey("characters.id"),
+        nullable=False
+    )
+
+    to_character_id = Column(
+        Integer,
+        ForeignKey("characters.id"),
+        nullable=False
+    )
+
+    relationship_type = Column(String, nullable=False)
+    notes = Column(Text, default="")
 
 Base.metadata.create_all(bind=engine)
 
@@ -301,6 +344,34 @@ class AIInput(BaseModel):
     direction: str = ""
     idea: str = ""
 
+class StoryThreadInput(BaseModel):
+    title: str
+    first_appearance: str = ""
+    status: str = "planted"
+    notes: str = ""
+    novel_id: Optional[int] = None
+
+
+class StoryThreadUpdate(BaseModel):
+    title: Optional[str] = None
+    first_appearance: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class RelationshipInput(BaseModel):
+    from_character_id: int
+    to_character_id: int
+    relationship_type: str
+    notes: str = ""
+    novel_id: Optional[int] = None
+
+
+class NarrativeDNAInput(BaseModel):
+    text: str = ""
+    novel_id: Optional[int] = None
+    scope: str = "excerpt"
+    focus: str = "full"
 
 # ==================================================
 # 9. OWNERSHIP HELPERS
@@ -914,7 +985,253 @@ def delete_character(
             "message": "Character deleted"
         }
 
+# ==================================================
+# 16A. CHEKHOV'S GUN TRACKER
+# ==================================================
 
+@app.get("/api/chekhov")
+def list_story_threads(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, novel_id)
+
+        items = db.query(StoryThread).filter(
+            StoryThread.novel_id == novel.id
+        ).order_by(StoryThread.id.desc()).all()
+
+        return [
+            {
+                "id": item.id,
+                "title": item.title,
+                "first_appearance": item.first_appearance,
+                "status": item.status,
+                "notes": item.notes
+            }
+            for item in items
+        ]
+
+
+@app.post("/api/chekhov")
+def create_story_thread(
+    data: StoryThreadInput,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, data.novel_id)
+
+        item = StoryThread(
+            title=data.title,
+            first_appearance=data.first_appearance,
+            status=data.status,
+            notes=data.notes,
+            novel_id=novel.id
+        )
+
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+
+        return {"message": "Story thread added", "id": item.id}
+
+
+@app.put("/api/chekhov/{thread_id}")
+def update_story_thread(
+    thread_id: int,
+    data: StoryThreadUpdate,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        item = get_owned_record(
+            db, StoryThread, thread_id, user, "Story thread"
+        )
+
+        for key, value in data.dict(exclude_unset=True).items():
+            setattr(item, key, value)
+
+        db.commit()
+
+        return {"message": "Story thread updated"}
+
+
+@app.delete("/api/chekhov/{thread_id}")
+def delete_story_thread(
+    thread_id: int,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        item = get_owned_record(
+            db, StoryThread, thread_id, user, "Story thread"
+        )
+
+        db.delete(item)
+        db.commit()
+
+        return {"message": "Story thread deleted"}
+
+
+# ==================================================
+# 16B. CHARACTER RELATIONSHIP WEB
+# ==================================================
+
+@app.get("/api/relationships")
+def list_relationships(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, novel_id)
+
+        items = db.query(CharacterRelationship).filter(
+            CharacterRelationship.novel_id == novel.id
+        ).all()
+
+        return [
+            {
+                "id": item.id,
+                "from_character": item.from_character_id,
+                "to_character": item.to_character_id,
+                "from_name": db.query(Character).filter(
+                    Character.id == item.from_character_id
+                ).first().name,
+                "to_name": db.query(Character).filter(
+                    Character.id == item.to_character_id
+                ).first().name,
+                "relationship_type": item.relationship_type,
+                "notes": item.notes
+            }
+            for item in items
+        ]
+
+
+@app.post("/api/relationships")
+def create_relationship(
+    data: RelationshipInput,
+    user=Depends(get_current_user)
+):
+    if data.from_character_id == data.to_character_id:
+        raise HTTPException(400, "A character cannot be related to itself.")
+
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, data.novel_id)
+
+        first = get_owned_record(
+            db, Character, data.from_character_id, user, "Character"
+        )
+        second = get_owned_record(
+            db, Character, data.to_character_id, user, "Character"
+        )
+
+        if first.novel_id != novel.id or second.novel_id != novel.id:
+            raise HTTPException(
+                400, "Both characters must belong to the selected novel."
+            )
+
+        item = CharacterRelationship(
+            novel_id=novel.id,
+            from_character_id=first.id,
+            to_character_id=second.id,
+            relationship_type=data.relationship_type,
+            notes=data.notes
+        )
+
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+
+        return {"message": "Relationship added", "id": item.id}
+
+
+@app.delete("/api/relationships/{relationship_id}")
+def delete_relationship(
+    relationship_id: int,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        item = get_owned_record(
+            db,
+            CharacterRelationship,
+            relationship_id,
+            user,
+            "Relationship"
+        )
+
+        db.delete(item)
+        db.commit()
+
+        return {"message": "Relationship deleted"}
+
+
+# ==================================================
+# 16C. NARRATIVE DNA ANALYSIS
+# ==================================================
+
+@app.post("/api/ai/narrative-dna")
+def analyze_narrative_dna(
+    data: NarrativeDNAInput,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, data.novel_id)
+
+        if data.scope == "novel":
+            chapters = db.query(Chapter).filter(
+                Chapter.novel_id == novel.id
+            ).order_by(Chapter.id.asc()).all()
+
+            source_text = "\n\n".join(
+                f"{chapter.title}\n{chapter.content or ''}"
+                for chapter in chapters
+            )[-40000:]
+
+            if not source_text.strip():
+                raise HTTPException(400, "This novel has no chapters to analyze.")
+
+        else:
+            source_text = data.text.strip()
+
+            if not source_text:
+                raise HTTPException(400, "Please provide text to analyze.")
+
+        context = get_world_context(db, novel.id)
+
+    instructions = """
+You are the Narrative DNA analyst for Light Novel Buddy.
+
+Analyze the author's writing without rewriting it.
+
+Identify patterns supported by the supplied text.
+Do not invent details or make unsupported claims.
+
+Consider:
+- Writing voice and sentence structure
+- Vocabulary and descriptive habits
+- Dialogue patterns
+- Pacing and scene transitions
+- Themes and recurring motifs
+- Point of view and narrative distance
+
+Explain what is distinctive, what is consistent,
+and what the author could experiment with.
+
+Use clear headings and specific examples from the text.
+"""
+
+    prompt = f"""
+ANALYSIS FOCUS: {data.focus}
+
+ESTABLISHED STORY CONTEXT:
+{context}
+
+TEXT TO ANALYZE:
+{source_text}
+"""
+
+    return {
+        "result": ask_ai(instructions, prompt)
+            }
+    
 # ==================================================
 # 17. AI: GRAMMAR ASSISTANT
 # ==================================================
