@@ -4,3 +4,6 @@ sqlalchemy
 adaption>=0.16.0
 python-dotenv
 pydantic
+python-jose[cryptography]
+python-multipart
+email-validator
