@@ -1,12 +1,11 @@
 /* Light Novel Buddy authentication and multi-novel management */
 
 (() => {
+    "use strict";
+
     const API = (window.LNB_CONFIG && window.LNB_CONFIG.apiBase)
         || window.LNB_API
         || "https://lightnovelbuddy.onrender.com";
-    "use strict";
-
-    const API = "https://lightnovelbuddy.onrender.com";
 
     const TOKEN_KEY = "lnb_access_token";
     const NOVEL_KEY = "lnb_selected_novel";

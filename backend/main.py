@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text,
     ForeignKey, inspect, text
@@ -16,8 +16,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from adaption import Adaption
 
-from auth import build_auth_models, make_auth_router, get_owned_novel
-from novels import make_novel_router
+try:  # imported as part of a package (uvicorn backend.main:app)
+    from .auth import build_auth_models, make_auth_router, get_owned_novel
+    from .novels import make_novel_router
+except ImportError:  # run from inside backend/
+    from auth import build_auth_models, make_auth_router, get_owned_novel
+    from novels import make_novel_router
 
 
 # ==================================================
@@ -46,21 +50,11 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ] or DEFAULT_ORIGINS
 
-engine = create_engine(
-    DATABASE_URL,
-    # check_same_thread is SQLite-only; psycopg rejects it as a connection option.
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    f"sqlite:///{BASE_DIR / 'database.db'}"
-)
-
 engine_options = {"pool_pre_ping": True}
 
 if DATABASE_URL.startswith("sqlite"):
-    engine_options["connect_args"] = {
-        "check_same_thread": False
-    }
+    # check_same_thread is SQLite-only; psycopg rejects it as a connection option.
+    engine_options["connect_args"] = {"check_same_thread": False}
 
 engine = create_engine(DATABASE_URL, **engine_options)
 
@@ -215,6 +209,20 @@ class CharacterRelationship(Base):
     relationship_type = Column(String, nullable=False)
     notes = Column(Text, default="")
 
+
+class IdempotencyRecord(Base):
+    """Remembers a create that already happened, so a retried request
+    returns the original row instead of inserting a duplicate."""
+
+    __tablename__ = "idempotency_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(128), nullable=False, unique=True, index=True)
+    endpoint = Column(String(120), nullable=False)
+    resource_id = Column(Integer, nullable=False)
+    created_at = Column(Integer, nullable=False, default=lambda: int(time.time()))
+
+
 Base.metadata.create_all(bind=engine)
 
 
@@ -271,7 +279,7 @@ app.add_middleware(
 # ==================================================
 
 auth_router, User, base_get_current_user, auth_get_db = (
-    make_auth_router(User, RefreshSession, SessionLocal)
+    make_auth_router(User, RefreshSession, lambda: SessionLocal())
 )
 
 
@@ -312,7 +320,7 @@ app.include_router(auth_router)
 
 app.include_router(
     make_novel_router(
-        SessionLocal,
+        lambda: SessionLocal(),
         Novel,
         get_current_user
     )
@@ -328,6 +336,36 @@ class ChapterInput(BaseModel):
     content: str = ""
     novel_id: Optional[int] = None
 
+    @field_validator("title", mode="before")
+    @classmethod
+    def check_title(cls, v): return _clean_text(v, "Title", required=True, max_len=200)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def check_content(cls, v): return _clean_text(v, "Content", required=True, max_len=1_000_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
+
+class ChapterUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    novel_id: Optional[int] = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def check_title(cls, v): return _clean_text(v, "Title", required=True, max_len=200)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def check_content(cls, v): return _clean_text(v, "Content", required=True, max_len=1_000_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
 
 class MemoryInput(BaseModel):
     name: str
@@ -335,11 +373,39 @@ class MemoryInput(BaseModel):
     description: str = ""
     novel_id: Optional[int] = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "Name", required=True, max_len=200)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def check_category(cls, v): return _clean_text(v, "Category", required=True, max_len=120)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", required=True, max_len=20_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
 
 class MemoryUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
     description: Optional[str] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "Name", required=True, max_len=200)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def check_category(cls, v): return _clean_text(v, "Category", required=True, max_len=120)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", required=True, max_len=20_000)
 
 
 class CharacterInput(BaseModel):
@@ -348,11 +414,39 @@ class CharacterInput(BaseModel):
     description: str = ""
     novel_id: Optional[int] = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "Name", required=True, max_len=200)
+
+    @field_validator("personality", mode="before")
+    @classmethod
+    def check_personality(cls, v): return _clean_text(v, "Personality", required=True, max_len=20_000)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", required=True, max_len=20_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
 
 class CharacterUpdate(BaseModel):
     name: Optional[str] = None
     personality: Optional[str] = None
     description: Optional[str] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "Name", required=True, max_len=200)
+
+    @field_validator("personality", mode="before")
+    @classmethod
+    def check_personality(cls, v): return _clean_text(v, "Personality", required=True, max_len=20_000)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", required=True, max_len=20_000)
 
 
 class AIInput(BaseModel):
@@ -387,6 +481,37 @@ class AIInput(BaseModel):
 # 5. DATABASE HELPERS
 # --------------------------------------------------
 
+def _clean_text(value, label, *, required=False, strip=False, max_len=None):
+    """Reject null/blank payloads instead of storing them.
+
+    Used from pydantic validators so every create and update route answers
+    with a 422 rather than a 500 IntegrityError or a silently wiped column.
+    """
+    if value is None:
+        if required:
+            raise ValueError(f"{label} is required.")
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be text.")
+    cleaned = value.strip() if strip else value
+    if required and not cleaned.strip():
+        raise ValueError(f"{label} cannot be blank.")
+    if max_len is not None and len(cleaned) > max_len:
+        raise ValueError(f"{label} must be at most {max_len} characters.")
+    return cleaned
+
+
+def _clean_novel_id(value):
+    """Novel ids are optional, but when supplied they must be a positive int."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("novel_id must be an integer.")
+    if value < 1:
+        raise ValueError("novel_id must be a positive integer.")
+    return value
+
+
 def normalize_idempotency_key(raw_key: Optional[str]) -> Optional[str]:
     if raw_key is None:
         return None
@@ -412,6 +537,25 @@ def save_with_idempotency(db, *, key: Optional[str], endpoint: str, model_cls, c
                 return {"message": message, "id": item.id}
             db.delete(existing)
             db.flush()
+
+    item = model_cls(**create_kwargs)
+    db.add(item)
+    db.flush()
+
+    if key:
+        db.add(IdempotencyRecord(
+            key=key,
+            endpoint=endpoint,
+            resource_id=item.id,
+            created_at=now,
+        ))
+
+    db.commit()
+    db.refresh(item)
+
+    return {"message": message, "id": item.id}
+
+
 class StoryThreadInput(BaseModel):
     title: str
     first_appearance: str = ""
@@ -471,15 +615,6 @@ def resolve_novel(db, user, novel_id=None):
     return novel
 
 
-def build_world_context(novel_id=1, *, label=False):
-    """Collect saved lore and recent chapters for AI context.
-
-    Returns (context_text, references). When ``label`` is true each block is
-    prefixed with a stable tag such as [W12], [C3] or [CH5] and the matching
-    reference metadata is returned so a caller can resolve what the model cites.
-    """
-
-    refs = {}
 def get_owned_record(db, model, record_id, user, label):
 
     record = db.query(model).filter(
@@ -501,50 +636,21 @@ def get_owned_record(db, model, record_id, user, label):
 
     return record
 
-        def tag(prefix, identifier):
-            return f"[{prefix}{identifier}] " if label else ""
 
-        parts = []
+def build_world_context(db, novel_id, *, label=False):
+    """Collect saved lore and recent chapters for AI context.
 
-# ==================================================
-# 10. WORLD CONTEXT
-# ==================================================
+    Returns (context_text, references). When ``label`` is true each block is
+    prefixed with a stable tag such as [W12], [C3] or [CH5] and the matching
+    reference metadata is returned so a caller can resolve what the model cites.
+    """
 
-        for item in memories:
-            if label:
-                refs[f"W{item.id}"] = {
-                    "tag": f"W{item.id}",
-                    "kind": "world",
-                    "id": item.id,
-                    "title": item.name,
-                    "category": item.category,
-                }
-            parts.append(
-                tag("W", item.id) +
-                f"{item.category}: {item.name}\n"
-                f"{item.description}"
-            )
-def get_world_context(db, novel_id):
+    refs = {}
 
     memories = db.query(MemoryEntry).filter(
         MemoryEntry.novel_id == novel_id
     ).all()
 
-        for character in characters:
-            if label:
-                refs[f"C{character.id}"] = {
-                    "tag": f"C{character.id}",
-                    "kind": "character",
-                    "id": character.id,
-                    "title": character.name,
-                    "category": "Character",
-                }
-            parts.append(
-                tag("C", character.id) +
-                f"Name: {character.name}\n"
-                f"Personality: {character.personality}\n"
-                f"Details: {character.description}"
-            )
     characters = db.query(Character).filter(
         Character.novel_id == novel_id
     ).all()
@@ -555,27 +661,75 @@ def get_world_context(db, novel_id):
         Chapter.id.desc()
     ).limit(10).all()
 
-        for chapter in reversed(chapters):
-            if label:
-                refs[f"CH{chapter.id}"] = {
-                    "tag": f"CH{chapter.id}",
-                    "kind": "chapter",
-                    "id": chapter.id,
-                    "title": chapter.title,
-                    "category": "Chapter",
-                }
-            parts.append(
-                tag("CH", chapter.id) +
-                f"{chapter.title}:\n"
-                f"{(chapter.content or '')[-2500:]}"
-            )
+    def tag(prefix, identifier):
+        return f"[{prefix}{identifier}] " if label else ""
 
-        return "\n\n".join(parts), refs
+    parts = ["ESTABLISHED WORLD INFORMATION:"]
+
+    for item in memories:
+
+        if label:
+            refs[f"W{item.id}"] = {
+                "tag": f"W{item.id}",
+                "kind": "world",
+                "id": item.id,
+                "title": item.name,
+                "category": item.category,
+            }
+
+        parts.append(
+            tag("W", item.id) +
+            f"{item.category}: {item.name}\n"
+            f"{item.description}"
+        )
+
+    parts.append("\nCHARACTERS:")
+
+    for character in characters:
+
+        if label:
+            refs[f"C{character.id}"] = {
+                "tag": f"C{character.id}",
+                "kind": "character",
+                "id": character.id,
+                "title": character.name,
+                "category": "Character",
+            }
+
+        parts.append(
+            tag("C", character.id) +
+            f"Name: {character.name}\n"
+            f"Personality: {character.personality}\n"
+            f"Details: {character.description}"
+        )
+
+    parts.append("\nRECENT CHAPTERS:")
+
+    for chapter in reversed(chapters):
+
+        if label:
+            refs[f"CH{chapter.id}"] = {
+                "tag": f"CH{chapter.id}",
+                "kind": "chapter",
+                "id": chapter.id,
+                "title": chapter.title,
+                "category": "Chapter",
+            }
+
+        parts.append(
+            tag("CH", chapter.id) +
+            f"{chapter.title}:\n"
+            f"{(chapter.content or '')[-2500:]}"
+        )
+
+    return "\n\n".join(parts), refs
 
 
-def get_world_context(novel_id=1):
-    """Backward-compatible unlabelled context used by the other assistants."""
-    context, _ = build_world_context(novel_id)
+def get_world_context(db, novel_id):
+    """Unlabelled context, ignoring the reference map."""
+
+    context, _ = build_world_context(db, novel_id)
+
     return context
 
 
@@ -607,38 +761,7 @@ def extract_reference_tags(text: str, known: dict) -> list:
 
 def reference_payload(tags: list, known: dict) -> list:
     return [known[tag] for tag in tags if tag in known]
-    parts = ["ESTABLISHED WORLD INFORMATION:"]
 
-    for item in memories:
-
-        parts.append(
-            f"{item.category}: {item.name}\n"
-            f"{item.description}"
-        )
-
-    parts.append("\nCHARACTERS:")
-
-    for character in characters:
-
-        parts.append(
-            f"Name: {character.name}\n"
-            f"Personality: {character.personality}\n"
-            f"Details: {character.description}"
-        )
-
-    parts.append("\nRECENT CHAPTERS:")
-
-    for chapter in reversed(chapters):
-
-        parts.append(
-            f"{chapter.title}:\n"
-            f"{(chapter.content or '')[-2500:]}"
-        )
-
-    return "\n\n".join(parts)
-
-
-# ==================================================
 # 11. ADAPTION AI CONNECTION
 # ==================================================
 
@@ -814,8 +937,11 @@ def list_chapters(
 @app.post("/api/chapters")
 def create_chapter(
     data: ChapterInput,
-    user=Depends(get_current_user)
+    user=Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
+
+    idempotency_key = normalize_idempotency_key(idempotency_key)
 
     with SessionLocal() as db:
 
@@ -825,20 +951,22 @@ def create_chapter(
             data.novel_id
         )
 
-        chapter = Chapter(
-            title=data.title,
-            content=data.content,
-            novel_id=novel.id
+        return save_with_idempotency(
+            db,
+            key=idempotency_key,
+            endpoint="chapters",
+            model_cls=Chapter,
+            create_kwargs={
+                "title": data.title,
+                "content": data.content,
+                "novel_id": novel.id,
+            },
+            update_fields={
+                "title": data.title,
+                "content": data.content,
+            },
+            message="Chapter saved",
         )
-
-        db.add(chapter)
-        db.commit()
-        db.refresh(chapter)
-
-        return {
-            "message": "Chapter saved",
-            "id": chapter.id
-        }
 
 
 @app.get("/api/chapters/{chapter_id}")
@@ -867,7 +995,7 @@ def get_chapter(
 @app.put("/api/chapters/{chapter_id}")
 def update_chapter(
     chapter_id: int,
-    data: ChapterInput,
+    data: ChapterUpdate,
     user=Depends(get_current_user)
 ):
 
@@ -892,8 +1020,15 @@ def update_chapter(
 
             chapter.novel_id = data.novel_id
 
-        chapter.title = data.title
-        chapter.content = data.content
+        updates = data.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(
+                422,
+                "No fields to update."
+            )
+
+        for key, value in updates.items():
+            setattr(chapter, key, value)
 
         db.commit()
 
@@ -905,10 +1040,27 @@ def update_chapter(
 @app.delete("/api/chapters/{chapter_id}")
 def delete_chapter(
     chapter_id: int,
-    user=Depends(get_current_user)
+    user=Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
 
+    idempotency_key = normalize_idempotency_key(idempotency_key)
+
     with SessionLocal() as db:
+
+        if idempotency_key:
+            # A retried delete after a lost response must succeed quietly
+            # instead of reporting the row as missing.
+            already = db.query(IdempotencyRecord).filter(
+                IdempotencyRecord.key == idempotency_key
+            ).first()
+            if already:
+                if already.endpoint != "chapters:delete":
+                    raise HTTPException(
+                        409,
+                        "Idempotency-Key already used for another endpoint."
+                    )
+                return {"message": "Chapter deleted"}
 
         chapter = get_owned_record(
             db,
@@ -919,6 +1071,16 @@ def delete_chapter(
         )
 
         db.delete(chapter)
+        db.flush()
+
+        if idempotency_key:
+            db.add(IdempotencyRecord(
+                key=idempotency_key,
+                endpoint="chapters:delete",
+                resource_id=chapter_id,
+                created_at=int(time.time()),
+            ))
+
         db.commit()
 
         return {
@@ -958,8 +1120,11 @@ def list_memories(
 @app.post("/api/memories")
 def create_memory(
     data: MemoryInput,
-    user=Depends(get_current_user)
+    user=Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
+
+    idempotency_key = normalize_idempotency_key(idempotency_key)
 
     with SessionLocal() as db:
 
@@ -969,21 +1134,24 @@ def create_memory(
             data.novel_id
         )
 
-        memory = MemoryEntry(
-            name=data.name,
-            category=data.category,
-            description=data.description,
-            novel_id=novel.id
+        return save_with_idempotency(
+            db,
+            key=idempotency_key,
+            endpoint="memories",
+            model_cls=MemoryEntry,
+            create_kwargs={
+                "name": data.name,
+                "category": data.category,
+                "description": data.description,
+                "novel_id": novel.id,
+            },
+            update_fields={
+                "name": data.name,
+                "category": data.category,
+                "description": data.description,
+            },
+            message="World memory saved",
         )
-
-        db.add(memory)
-        db.commit()
-        db.refresh(memory)
-
-        return {
-            "message": "World memory saved",
-            "id": memory.id
-        }
 
 
 @app.put("/api/memories/{memory_id}")
@@ -1003,7 +1171,14 @@ def update_memory(
             "Memory"
         )
 
-        for key, value in data.dict(exclude_unset=True).items():
+        updates = data.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(
+                422,
+                "No fields to update."
+            )
+
+        for key, value in updates.items():
             setattr(memory, key, value)
 
         db.commit()
@@ -1069,8 +1244,11 @@ def list_characters(
 @app.post("/api/characters")
 def create_character(
     data: CharacterInput,
-    user=Depends(get_current_user)
+    user=Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
+
+    idempotency_key = normalize_idempotency_key(idempotency_key)
 
     with SessionLocal() as db:
 
@@ -1080,21 +1258,24 @@ def create_character(
             data.novel_id
         )
 
-        character = Character(
-            name=data.name,
-            personality=data.personality,
-            description=data.description,
-            novel_id=novel.id
+        return save_with_idempotency(
+            db,
+            key=idempotency_key,
+            endpoint="characters",
+            model_cls=Character,
+            create_kwargs={
+                "name": data.name,
+                "personality": data.personality,
+                "description": data.description,
+                "novel_id": novel.id,
+            },
+            update_fields={
+                "name": data.name,
+                "personality": data.personality,
+                "description": data.description,
+            },
+            message="Character added",
         )
-
-        db.add(character)
-        db.commit()
-        db.refresh(character)
-
-        return {
-            "message": "Character added",
-            "id": character.id
-        }
 
 
 @app.put("/api/characters/{character_id}")
@@ -1114,7 +1295,14 @@ def update_character(
             "Character"
         )
 
-        for key, value in data.dict(exclude_unset=True).items():
+        updates = data.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(
+                422,
+                "No fields to update."
+            )
+
+        for key, value in updates.items():
             setattr(character, key, value)
 
         db.commit()
@@ -1209,7 +1397,14 @@ def update_story_thread(
             db, StoryThread, thread_id, user, "Story thread"
         )
 
-        for key, value in data.dict(exclude_unset=True).items():
+        updates = data.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(
+                422,
+                "No fields to update."
+            )
+
+        for key, value in updates.items():
             setattr(item, key, value)
 
         db.commit()
@@ -1445,9 +1640,9 @@ def consistency_checker(
 ):
 
     # Labelled context so the model can point at the saved record it used.
-    context, known_refs = build_world_context(data.novel_id, label=True)
     with SessionLocal() as db:
-        _, context = ai_context(db, user, data.novel_id)
+        novel_id, _ = ai_context(db, user, data.novel_id)
+        context, known_refs = build_world_context(db, novel_id, label=True)
 
     instructions = """
 You are the story consistency checker of Light Novel Buddy.
@@ -1473,9 +1668,6 @@ For every possible issue:
    point, say "no saved entry" instead of inventing a tag.
 3. Explain the conflicting established detail.
 4. Suggest a possible correction.
-1. Identify the relevant passage.
-2. Explain the conflicting established detail.
-3. Suggest a possible correction.
 
 Do not rewrite the chapter automatically.
 """
@@ -1490,7 +1682,7 @@ NEW CHAPTER TO CHECK:
 {data.text}
 """
 
-    result = ask_ai(instructions, prompt, data.novel_id)
+    result = ask_ai(instructions, prompt)
 
     # Resolve the citations the model actually used. Anything unknown is dropped.
     tags = extract_reference_tags(result, known_refs)
@@ -1498,8 +1690,6 @@ NEW CHAPTER TO CHECK:
     return {
         "result": result,
         "references": reference_payload(tags, known_refs),
-    return {
-        "result": ask_ai(instructions, prompt)
     }
 
 
@@ -1607,8 +1797,9 @@ Develop the selected directions further.
 You are the interactive story development assistant
 of Light Novel Buddy.
 
-Generate four distinct possible directions.
+Help the author explore possible directions for the story.
 
+Generate four distinct possibilities.
 Each possibility should include:
 - A short title
 - What happens next
@@ -1638,12 +1829,9 @@ Author's own idea:
 Explore four possible directions.
 """
 
-    result = ask_ai(instructions, prompt, data.novel_id)
+    result = ask_ai(instructions, prompt)
 
     return {"result": result, "mode": "refined" if refining else "explore"}
-    return {
-        "result": ask_ai(instructions, prompt)
-    }
 
 
 # ==================================================

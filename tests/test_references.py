@@ -3,27 +3,16 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.main as app_module
 
 
-@pytest.fixture()
-def client(monkeypatch):
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    app_module.Base.metadata.create_all(bind=engine)
-    with TestingSession() as db:
-        db.add(app_module.Novel(id=1, title="Test Novel"))
+
+@pytest.fixture(autouse=True)
+def seed_lore(session_factory, client):
+    with session_factory() as db:
         db.add(app_module.MemoryEntry(id=12, name="Oakhaven", category="Kingdom",
                                       description="A forest kingdom.", novel_id=1))
         db.add(app_module.Character(id=3, name="Ash", personality="Quiet",
@@ -31,9 +20,6 @@ def client(monkeypatch):
         db.add(app_module.Chapter(id=5, title="Arrival", content="It rained.", novel_id=1))
         db.commit()
 
-    monkeypatch.setattr(app_module, "engine", engine)
-    monkeypatch.setattr(app_module, "SessionLocal", TestingSession)
-    return TestClient(app_module.app)
 
 
 def test_labelled_context_only_for_consistency(client, monkeypatch):
