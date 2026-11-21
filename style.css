@@ -88,6 +88,15 @@ select:focus-visible {
     min-height: 100vh;
 }
 
+/* #appRoot is also a flex container, so the inner .app was a flex item that
+   shrink-wrapped to its content and left dead space on the right. Let it fill
+   the page, and keep the sidebar beside the content at every width. */
+#appRoot > .app {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+}
+
 /* Sidebar */
 
 .sidebar {
@@ -1341,8 +1350,11 @@ footer {
 }
 
 @media (max-width: 760px) {
-    .app {
+    .app,
+    #appRoot > .app {
         display: block;
+        width: auto;
+        flex: initial;
     }
 
     .sidebar {
