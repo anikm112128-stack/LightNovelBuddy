@@ -151,7 +151,7 @@ async function request(path, method = "GET", data = null, { idempotencyKey = nul
             }
 
             if ($("backendStatus")) {
-                $("backendStatus").textContent = "● Backend connected";
+                setBackendStatus("● Backend connected", true);
             }
 
             return result;
@@ -175,9 +175,10 @@ async function request(path, method = "GET", data = null, { idempotencyKey = nul
             }
 
             if ($("backendStatus")) {
-                $("backendStatus").textContent = offline
-                    ? "○ Offline"
-                    : "○ Backend unavailable";
+                setBackendStatus(
+                    offline ? "○ Offline" : "○ Backend unavailable",
+                    false
+                );
             }
 
             throw new Error(
@@ -722,7 +723,51 @@ document.addEventListener("keydown", event => {
 });
 
 
+function setBackendStatus(text, connected) {
+    const el = $("backendStatus");
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.connected = connected ? "true" : "false";
+}
+
+/* Turn a failed request into an honest connection label.
+ *
+ * A 401/403 means the server answered and the session is simply missing, and a
+ * 404 means it answered but this account has no novel yet. Neither is an
+ * outage, so neither may be reported as one.
+ */
+function setBackendStatusFromError(error) {
+    const status = error && error.status;
+
+    if (status === 401 || status === 403 || (error && error.authRequired)) {
+        setBackendStatus("○ Sign in to load your studio", false);
+        return;
+    }
+
+    if (status === 404) {
+        setBackendStatus("● Backend connected — no novel yet", true);
+        return;
+    }
+
+    if (status) {
+        // The server replied, so the connection itself is fine.
+        setBackendStatus("● Backend connected", true);
+        return;
+    }
+
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    setBackendStatus(offline ? "○ Offline" : "○ Backend unavailable", false);
+}
+
 async function loadDashboard() {
+    // Every dashboard field comes from an owned novel, so there is nothing to
+    // show without a session. Asking anyway would 401 and be misreported as an
+    // outage.
+    if (!getAccessToken()) {
+        setBackendStatusFromError(Object.assign(new Error("signed out"), { authRequired: true }));
+        return;
+    }
+
     try {
         const d = await request("/api/dashboard");
 
@@ -747,7 +792,7 @@ async function loadDashboard() {
             : '<div class="empty">Your first chapter is waiting to be written.</div>';
 
     } catch (e) {
-        $("backendStatus").textContent = "Backend unavailable";
+        setBackendStatusFromError(e);
     }
 }
 
@@ -2040,7 +2085,7 @@ async function runCharacterAnalysis() {
 }
 
 window.addEventListener("offline", () => {
-    if ($("backendStatus")) $("backendStatus").textContent = "○ Offline";
+    setBackendStatus("○ Offline", false);
 });
 window.addEventListener("online", () => {
     initialise();
@@ -2056,16 +2101,24 @@ async function initialise() {
 
         await request("/api/health");
 
-        $("backendStatus").textContent = "● Backend connected";
+        setBackendStatus("● Backend connected", true);
 
-        loadDashboard();
+        // The dashboard needs an owned novel, which only exists once somebody
+        // is signed in. auth.js calls initialise() again after login.
+        if (getAccessToken()) {
+            loadDashboard();
+        } else {
+            setBackendStatusFromError(Object.assign(new Error("signed out"), { authRequired: true }));
+        }
 
     } catch (e) {
 
-        $("backendStatus").textContent = "○ Backend not connected";
+        setBackendStatus("○ Backend not connected", false);
 
     }
 
 }
+
+window.initialise = initialise;
 
 initialise();

@@ -14,6 +14,8 @@ async function mockApi(page) {
         }
         let status = 200, body = {};
         if (path === '/api/health') body = { status: 'online' };
+        else if (path === '/api/auth/me') body = { id: 1, email: 'writer@example.com' };
+        else if (path === '/api/novels') body = [{ id: 1, title: 'My Novel' }];
         else if (path === '/api/dashboard') body = {
             chapters: state.chapters.length,
             words: state.chapters.reduce((sum, c) => sum + c.content.trim().split(/\s+/).filter(Boolean).length, 0),
@@ -61,7 +63,17 @@ async function mockApi(page) {
     });
     return state;
 }
-async function open(page) { await page.goto('/'); await expect(page.locator('#backendStatus')).toContainText('Backend connected'); }
+// The app is session-gated, so every test starts already signed in: a seeded
+// token plus the mocked /api/auth/me and /api/novels responses above.
+async function open(page) {
+    await page.addInitScript(() => {
+        localStorage.setItem('lnb_access_token', 'test-token');
+        localStorage.setItem('lnb_selected_novel', '1');
+    });
+    await page.goto('/');
+    await expect(page.locator('#authScreen')).toBeHidden();
+    await expect(page.locator('#backendStatus')).toContainText('Backend connected');
+}
 async function nav(page, section) { await page.locator(`.nav[data-page="${section}"]`).click(); }
 
 test('restores new and edited drafts and keeps draft on failed save', async ({ page }) => {
