@@ -1,3 +1,4 @@
+
 import os
 import re
 import time
@@ -5,25 +6,23 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Path as FastAPIPath
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel
 from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    Text,
-    ForeignKey,
+    create_engine, Column, Integer, String, Text,
+    ForeignKey, inspect, text
 )
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from adaption import Adaption
 
+from auth import build_auth_models, make_auth_router, get_owned_novel
+from novels import make_novel_router
 
-# --------------------------------------------------
+
+# ==================================================
 # 1. CONFIGURATION
-# --------------------------------------------------
+# ==================================================
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -51,7 +50,19 @@ engine = create_engine(
     DATABASE_URL,
     # check_same_thread is SQLite-only; psycopg rejects it as a connection option.
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    f"sqlite:///{BASE_DIR / 'database.db'}"
 )
+
+engine_options = {"pool_pre_ping": True}
+
+if DATABASE_URL.startswith("sqlite"):
+    engine_options["connect_args"] = {
+        "check_same_thread": False
+    }
+
+engine = create_engine(DATABASE_URL, **engine_options)
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -62,15 +73,29 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 
 
-# --------------------------------------------------
-# 2. DATABASE MODELS
-# --------------------------------------------------
+# ==================================================
+# 2. AUTHENTICATION DATABASE MODELS
+# ==================================================
+
+User, RefreshSession = build_auth_models(Base)
+
+
+# ==================================================
+# 3. APPLICATION DATABASE MODELS
+# ==================================================
 
 class Novel(Base):
     __tablename__ = "novels"
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, default="My Novel")
+
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True
+    )
 
     chapters = relationship(
         "Chapter",
@@ -97,9 +122,16 @@ class Chapter(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     content = Column(Text, default="")
-    novel_id = Column(Integer, ForeignKey("novels.id"))
 
-    novel = relationship("Novel", back_populates="chapters")
+    novel_id = Column(
+        Integer,
+        ForeignKey("novels.id")
+    )
+
+    novel = relationship(
+        "Novel",
+        back_populates="chapters"
+    )
 
 
 class MemoryEntry(Base):
@@ -109,9 +141,16 @@ class MemoryEntry(Base):
     name = Column(String, nullable=False)
     category = Column(String, default="General")
     description = Column(Text, default="")
-    novel_id = Column(Integer, ForeignKey("novels.id"))
 
-    novel = relationship("Novel", back_populates="memories")
+    novel_id = Column(
+        Integer,
+        ForeignKey("novels.id")
+    )
+
+    novel = relationship(
+        "Novel",
+        back_populates="memories"
+    )
 
 
 class Character(Base):
@@ -121,39 +160,101 @@ class Character(Base):
     name = Column(String, nullable=False)
     personality = Column(Text, default="")
     description = Column(Text, default="")
-    novel_id = Column(Integer, ForeignKey("novels.id"))
 
-    novel = relationship("Novel", back_populates="characters")
+    novel_id = Column(
+        Integer,
+        ForeignKey("novels.id")
+    )
 
+    novel = relationship(
+        "Novel",
+        back_populates="characters"
+    )
 
-class IdempotencyRecord(Base):
-    __tablename__ = "idempotency_keys"
+class StoryThread(Base):
+    __tablename__ = "story_threads"
 
     id = Column(Integer, primary_key=True, index=True)
-    key = Column(String(128), nullable=False, unique=True, index=True)
-    endpoint = Column(String(128), nullable=False)
-    resource_id = Column(Integer, nullable=False)
-    created_at = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    first_appearance = Column(String, default="")
+    status = Column(String, default="planted")
+    notes = Column(Text, default="")
 
+    novel_id = Column(
+        Integer,
+        ForeignKey("novels.id"),
+        nullable=False,
+        index=True
+    )
+
+
+class CharacterRelationship(Base):
+    __tablename__ = "character_relationships"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    novel_id = Column(
+        Integer,
+        ForeignKey("novels.id"),
+        nullable=False,
+        index=True
+    )
+
+    from_character_id = Column(
+        Integer,
+        ForeignKey("characters.id"),
+        nullable=False
+    )
+
+    to_character_id = Column(
+        Integer,
+        ForeignKey("characters.id"),
+        nullable=False
+    )
+
+    relationship_type = Column(String, nullable=False)
+    notes = Column(Text, default="")
 
 Base.metadata.create_all(bind=engine)
 
 
-# Create a default novel if the database is empty.
-with SessionLocal() as db:
-    if db.query(Novel).count() == 0:
-        db.add(Novel(title="My Novel"))
-        db.commit()
+# ==================================================
+# 4. EXISTING DATABASE MIGRATION
+# ==================================================
+
+# Add owner_id to existing SQLite databases without
+# deleting chapters, memories, characters or novels.
+
+if DATABASE_URL.startswith("sqlite"):
+
+    inspector = inspect(engine)
+
+    if "novels" in inspector.get_table_names():
+
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("novels")
+        }
+
+        if "owner_id" not in columns:
+
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE novels "
+                        "ADD COLUMN owner_id INTEGER REFERENCES users(id)"
+                    )
+                )
 
 
-# --------------------------------------------------
-# 3. FASTAPI APPLICATION
-# --------------------------------------------------
+# ==================================================
+# 5. FASTAPI APPLICATION
+# ==================================================
 
 app = FastAPI(
     title="Light Novel Buddy API",
     description="AI writing companion for light novel authors",
-    version="2.0"
+    version="2.1"
 )
 
 app.add_middleware(
@@ -161,168 +262,102 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
-# --------------------------------------------------
-# 4. REQUEST SCHEMAS
-# --------------------------------------------------
 
-def _clean_text(value: object, label: str, *, required: bool = False, strip: bool = False, max_len: int = 50_000) -> str:
-    if value is None:
-        raise ValueError(f"{label} cannot be null.")
-    if not isinstance(value, str):
-        raise ValueError(f"{label} must be text.")
-    if "\x00" in value:
-        raise ValueError(f"{label} contains invalid characters.")
-    cleaned = value.strip() if (required or strip) else value
-    if required and not cleaned:
-        raise ValueError(f"{label} cannot be blank.")
-    if len(cleaned) > max_len:
-        raise ValueError(f"{label} must be {max_len} characters or fewer.")
-    return cleaned
+# ==================================================
+# 6. AUTHENTICATION ROUTES
+# ==================================================
+
+auth_router, User, base_get_current_user, auth_get_db = (
+    make_auth_router(User, RefreshSession, SessionLocal)
+)
 
 
-def _clean_novel_id(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError("novel_id must be a positive integer.")
-    return value
+def get_current_user(user=Depends(base_get_current_user)):
+
+    # Legacy data is assigned only to the email
+    # explicitly configured by the application owner.
+
+    initial_email = os.getenv(
+        "INITIAL_OWNER_EMAIL",
+        ""
+    ).strip().lower()
+
+    if initial_email and user.email.lower() == initial_email:
+
+        with SessionLocal() as db:
+
+            legacy_novels = db.query(Novel).filter(
+                Novel.owner_id.is_(None)
+            ).all()
+
+            if legacy_novels:
+
+                for novel in legacy_novels:
+                    novel.owner_id = user.id
+
+                db.commit()
+
+    return user
 
 
-class _UpdateBase(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+app.include_router(auth_router)
 
-    @model_validator(mode="after")
-    def require_at_least_one_field(self):
-        if not self.model_fields_set:
-            raise ValueError("At least one field must be provided for update.")
-        return self
 
+# ==================================================
+# 7. MULTI-NOVEL ROUTES
+# ==================================================
+
+app.include_router(
+    make_novel_router(
+        SessionLocal,
+        Novel,
+        get_current_user
+    )
+)
+
+
+# ==================================================
+# 8. REQUEST SCHEMAS
+# ==================================================
 
 class ChapterInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     title: str
     content: str = ""
-    novel_id: int = 1
-
-    @field_validator("title", mode="before")
-    @classmethod
-    def check_title(cls, v): return _clean_text(v, "Chapter title", required=True, max_len=300)
-
-    @field_validator("content", mode="before")
-    @classmethod
-    def check_content(cls, v): return _clean_text(v, "Chapter content", max_len=500_000)
-
-    @field_validator("novel_id", mode="before")
-    @classmethod
-    def check_novel(cls, v): return _clean_novel_id(v)
-
-
-class ChapterUpdate(_UpdateBase):
-    title: Optional[str] = None
-    content: Optional[str] = None
-
-    @field_validator("title", mode="before")
-    @classmethod
-    def check_title(cls, v): return _clean_text(v, "Chapter title", required=True, max_len=300)
-
-    @field_validator("content", mode="before")
-    @classmethod
-    def check_content(cls, v): return _clean_text(v, "Chapter content", max_len=500_000)
+    novel_id: Optional[int] = None
 
 
 class MemoryInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     name: str
     category: str = "General"
     description: str = ""
-    novel_id: int = 1
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def check_name(cls, v): return _clean_text(v, "World entry name", required=True, max_len=200)
-
-    @field_validator("category", mode="before")
-    @classmethod
-    def check_category(cls, v): return _clean_text(v, "Category", required=True, max_len=100)
-
-    @field_validator("description", mode="before")
-    @classmethod
-    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
-
-    @field_validator("novel_id", mode="before")
-    @classmethod
-    def check_novel(cls, v): return _clean_novel_id(v)
+    novel_id: Optional[int] = None
 
 
-class MemoryUpdate(_UpdateBase):
+class MemoryUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
     description: Optional[str] = None
 
-    @field_validator("name", mode="before")
-    @classmethod
-    def check_name(cls, v): return _clean_text(v, "World entry name", required=True, max_len=200)
-
-    @field_validator("category", mode="before")
-    @classmethod
-    def check_category(cls, v): return _clean_text(v, "Category", required=True, max_len=100)
-
-    @field_validator("description", mode="before")
-    @classmethod
-    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
-
 
 class CharacterInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     name: str
     personality: str = ""
     description: str = ""
-    novel_id: int = 1
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def check_name(cls, v): return _clean_text(v, "Character name", required=True, max_len=200)
-
-    @field_validator("personality", mode="before")
-    @classmethod
-    def check_personality(cls, v): return _clean_text(v, "Personality", strip=True, max_len=500)
-
-    @field_validator("description", mode="before")
-    @classmethod
-    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
-
-    @field_validator("novel_id", mode="before")
-    @classmethod
-    def check_novel(cls, v): return _clean_novel_id(v)
+    novel_id: Optional[int] = None
 
 
-class CharacterUpdate(_UpdateBase):
+class CharacterUpdate(BaseModel):
     name: Optional[str] = None
     personality: Optional[str] = None
     description: Optional[str] = None
 
-    @field_validator("name", mode="before")
-    @classmethod
-    def check_name(cls, v): return _clean_text(v, "Character name", required=True, max_len=200)
-
-    @field_validator("personality", mode="before")
-    @classmethod
-    def check_personality(cls, v): return _clean_text(v, "Personality", strip=True, max_len=500)
-
-    @field_validator("description", mode="before")
-    @classmethod
-    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
-
 
 class AIInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     text: str
-    novel_id: int = 1
+    novel_id: Optional[int] = None
     style: str = ""
     direction: str = ""
     idea: str = ""
@@ -377,59 +412,60 @@ def save_with_idempotency(db, *, key: Optional[str], endpoint: str, model_cls, c
                 return {"message": message, "id": item.id}
             db.delete(existing)
             db.flush()
-
-    item = model_cls(**create_kwargs)
-    db.add(item)
-    try:
-        db.flush()
-        if key:
-            db.add(IdempotencyRecord(key=key, endpoint=endpoint, resource_id=item.id, created_at=now))
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        if key:
-            existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key, IdempotencyRecord.endpoint == endpoint).first()
-            if existing:
-                winner = db.query(model_cls).filter(model_cls.id == existing.resource_id).first()
-                if winner:
-                    return {"message": message, "id": winner.id}
-        raise HTTPException(status_code=409, detail="Duplicate conflicting request.")
-    except SQLAlchemyError:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Database error while saving changes.")
-
-    db.refresh(item)
-    return {"message": message, "id": item.id}
+class StoryThreadInput(BaseModel):
+    title: str
+    first_appearance: str = ""
+    status: str = "planted"
+    notes: str = ""
+    novel_id: Optional[int] = None
 
 
-def delete_with_idempotency(db, *, key: Optional[str], endpoint: str, model_cls, resource_id: int, not_found: str, message: str):
-    now = int(time.time())
-    if key:
-        existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key).first()
-        if existing:
-            if existing.endpoint != endpoint:
-                raise HTTPException(status_code=409, detail="Idempotency-Key already used for another endpoint.")
-            return {"message": message}
+class StoryThreadUpdate(BaseModel):
+    title: Optional[str] = None
+    first_appearance: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
 
-    item = db.query(model_cls).filter(model_cls.id == resource_id).first()
-    if not item:
-        raise HTTPException(404, not_found)
 
-    db.delete(item)
-    if key:
-        db.add(IdempotencyRecord(key=key, endpoint=endpoint, resource_id=resource_id, created_at=now))
-    db.commit()
-    return {"message": message}
+class RelationshipInput(BaseModel):
+    from_character_id: int
+    to_character_id: int
+    relationship_type: str
+    notes: str = ""
+    novel_id: Optional[int] = None
 
-def get_novel(db, novel_id):
+
+class NarrativeDNAInput(BaseModel):
+    text: str = ""
+    novel_id: Optional[int] = None
+    scope: str = "excerpt"
+    focus: str = "full"
+
+# ==================================================
+# 9. OWNERSHIP HELPERS
+# ==================================================
+
+def resolve_novel(db, user, novel_id=None):
+
+    if novel_id is not None:
+
+        return get_owned_novel(
+            db,
+            Novel,
+            novel_id,
+            user.id
+        )
+
     novel = db.query(Novel).filter(
-        Novel.id == novel_id
+        Novel.owner_id == user.id
+    ).order_by(
+        Novel.id.asc()
     ).first()
 
     if not novel:
         raise HTTPException(
-            status_code=404,
-            detail="Novel not found."
+            404,
+            "No novel found. Create a novel first."
         )
 
     return novel
@@ -444,30 +480,35 @@ def build_world_context(novel_id=1, *, label=False):
     """
 
     refs = {}
+def get_owned_record(db, model, record_id, user, label):
 
-    with SessionLocal() as db:
-        get_novel(db, novel_id)
+    record = db.query(model).filter(
+        model.id == record_id
+    ).first()
 
-        memories = db.query(MemoryEntry).filter(
-            MemoryEntry.novel_id == novel_id
-        ).all()
+    if not record:
+        raise HTTPException(
+            404,
+            f"{label} not found."
+        )
 
-        characters = db.query(Character).filter(
-            Character.novel_id == novel_id
-        ).all()
+    get_owned_novel(
+        db,
+        Novel,
+        record.novel_id,
+        user.id
+    )
 
-        chapters = db.query(Chapter).filter(
-            Chapter.novel_id == novel_id
-        ).order_by(
-            Chapter.id.desc()
-        ).limit(10).all()
+    return record
 
         def tag(prefix, identifier):
             return f"[{prefix}{identifier}] " if label else ""
 
         parts = []
 
-        parts.append("ESTABLISHED WORLD INFORMATION:")
+# ==================================================
+# 10. WORLD CONTEXT
+# ==================================================
 
         for item in memories:
             if label:
@@ -483,8 +524,11 @@ def build_world_context(novel_id=1, *, label=False):
                 f"{item.category}: {item.name}\n"
                 f"{item.description}"
             )
+def get_world_context(db, novel_id):
 
-        parts.append("\nCHARACTERS:")
+    memories = db.query(MemoryEntry).filter(
+        MemoryEntry.novel_id == novel_id
+    ).all()
 
         for character in characters:
             if label:
@@ -501,8 +545,15 @@ def build_world_context(novel_id=1, *, label=False):
                 f"Personality: {character.personality}\n"
                 f"Details: {character.description}"
             )
+    characters = db.query(Character).filter(
+        Character.novel_id == novel_id
+    ).all()
 
-        parts.append("\nRECENT CHAPTERS:")
+    chapters = db.query(Chapter).filter(
+        Chapter.novel_id == novel_id
+    ).order_by(
+        Chapter.id.desc()
+    ).limit(10).all()
 
         for chapter in reversed(chapters):
             if label:
@@ -556,21 +607,52 @@ def extract_reference_tags(text: str, known: dict) -> list:
 
 def reference_payload(tags: list, known: dict) -> list:
     return [known[tag] for tag in tags if tag in known]
+    parts = ["ESTABLISHED WORLD INFORMATION:"]
+
+    for item in memories:
+
+        parts.append(
+            f"{item.category}: {item.name}\n"
+            f"{item.description}"
+        )
+
+    parts.append("\nCHARACTERS:")
+
+    for character in characters:
+
+        parts.append(
+            f"Name: {character.name}\n"
+            f"Personality: {character.personality}\n"
+            f"Details: {character.description}"
+        )
+
+    parts.append("\nRECENT CHAPTERS:")
+
+    for chapter in reversed(chapters):
+
+        parts.append(
+            f"{chapter.title}:\n"
+            f"{(chapter.content or '')[-2500:]}"
+        )
+
+    return "\n\n".join(parts)
 
 
-# --------------------------------------------------
-# 6. ADAPTION AI CONNECTION
-# --------------------------------------------------
+# ==================================================
+# 11. ADAPTION AI CONNECTION
+# ==================================================
 
-def ask_ai(instructions, user_input, novel_id=1):
+def ask_ai(instructions, user_input):
 
     if not API_KEY:
+
         raise HTTPException(
-            status_code=500,
-            detail="ADAPTION_API_KEY is missing from backend/.env"
+            500,
+            "ADAPTION_API_KEY is missing from backend/.env"
         )
 
     try:
+
         client = Adaption(api_key=API_KEY)
 
         response = client.responses.create(
@@ -590,28 +672,45 @@ def ask_ai(instructions, user_input, novel_id=1):
         raise
 
     except Exception as error:
+
         print("ADAPTION ERROR:", repr(error))
 
         raise HTTPException(
-            status_code=502,
-            detail=f"Adaption API error: {str(error)}"
+            502,
+            "Adaption API request failed."
         )
 
 
-# --------------------------------------------------
-# 7. GENERAL ROUTES
-# --------------------------------------------------
+def ai_context(db, user, novel_id):
+
+    novel = resolve_novel(
+        db,
+        user,
+        novel_id
+    )
+
+    return (
+        novel.id,
+        get_world_context(db, novel.id)
+    )
+
+
+# ==================================================
+# 12. PUBLIC ROUTES
+# ==================================================
 
 @app.get("/")
 def home():
+
     return {
         "message": "Welcome to Light Novel Buddy API",
-        "version": "2.0"
+        "version": "2.1"
     }
 
 
 @app.get("/api/health")
 def health():
+
     return {
         "status": "online",
         "adaption_key_configured": bool(API_KEY),
@@ -619,10 +718,23 @@ def health():
     }
 
 
+# ==================================================
+# 13. NOVEL AND DASHBOARD
+# ==================================================
+
 @app.get("/api/novel")
-def get_novel_info():
+def get_novel_info(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        novel = get_novel(db, 1)
+
+        novel = resolve_novel(
+            db,
+            user,
+            novel_id
+        )
 
         return {
             "id": novel.id,
@@ -631,18 +743,29 @@ def get_novel_info():
 
 
 @app.get("/api/dashboard")
-def dashboard():
+def dashboard(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
+
+        novel = resolve_novel(
+            db,
+            user,
+            novel_id
+        )
+
         chapters = db.query(Chapter).filter(
-            Chapter.novel_id == 1
+            Chapter.novel_id == novel.id
         ).all()
 
         characters = db.query(Character).filter(
-            Character.novel_id == 1
+            Character.novel_id == novel.id
         ).count()
 
         memories = db.query(MemoryEntry).filter(
-            MemoryEntry.novel_id == 1
+            MemoryEntry.novel_id == novel.id
         ).count()
 
         total_words = sum(
@@ -658,16 +781,25 @@ def dashboard():
         }
 
 
-# --------------------------------------------------
-# 8. CHAPTER ROUTES
-# --------------------------------------------------
+# ==================================================
+# 14. CHAPTER ROUTES
+# ==================================================
 
 @app.get("/api/chapters")
-def list_chapters():
+def list_chapters(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
+
+        novel = resolve_novel(db, user, novel_id)
+
         chapters = db.query(Chapter).filter(
-            Chapter.novel_id == 1
-        ).order_by(Chapter.id.desc()).all()
+            Chapter.novel_id == novel.id
+        ).order_by(
+            Chapter.id.desc()
+        ).all()
 
         return [
             {
@@ -680,30 +812,50 @@ def list_chapters():
 
 
 @app.post("/api/chapters")
-def create_chapter(data: ChapterInput, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
-    key = normalize_idempotency_key(idempotency_key)
+def create_chapter(
+    data: ChapterInput,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        get_novel(db, data.novel_id)
-        return save_with_idempotency(
+
+        novel = resolve_novel(
             db,
-            key=key,
-            endpoint="POST:/api/chapters",
-            model_cls=Chapter,
-            create_kwargs={"title": data.title, "content": data.content, "novel_id": data.novel_id},
-            update_fields={"title": data.title, "content": data.content},
-            message="Chapter saved",
+            user,
+            data.novel_id
         )
+
+        chapter = Chapter(
+            title=data.title,
+            content=data.content,
+            novel_id=novel.id
+        )
+
+        db.add(chapter)
+        db.commit()
+        db.refresh(chapter)
+
+        return {
+            "message": "Chapter saved",
+            "id": chapter.id
+        }
 
 
 @app.get("/api/chapters/{chapter_id}")
-def get_chapter(chapter_id: int = FastAPIPath(..., ge=1)):
-    with SessionLocal() as db:
-        chapter = db.query(Chapter).filter(
-            Chapter.id == chapter_id
-        ).first()
+def get_chapter(
+    chapter_id: int,
+    user=Depends(get_current_user)
+):
 
-        if not chapter:
-            raise HTTPException(404, "Chapter not found")
+    with SessionLocal() as db:
+
+        chapter = get_owned_record(
+            db,
+            Chapter,
+            chapter_id,
+            user,
+            "Chapter"
+        )
 
         return {
             "id": chapter.id,
@@ -713,47 +865,83 @@ def get_chapter(chapter_id: int = FastAPIPath(..., ge=1)):
 
 
 @app.put("/api/chapters/{chapter_id}")
-def update_chapter(data: ChapterUpdate, chapter_id: int = FastAPIPath(..., ge=1)):
+def update_chapter(
+    chapter_id: int,
+    data: ChapterInput,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        chapter = db.query(Chapter).filter(
-            Chapter.id == chapter_id
-        ).first()
 
-        if not chapter:
-            raise HTTPException(404, "Chapter not found")
+        chapter = get_owned_record(
+            db,
+            Chapter,
+            chapter_id,
+            user,
+            "Chapter"
+        )
 
-        for key, value in data.model_dump(exclude_unset=True).items():
-            setattr(chapter, key, value)
+        if data.novel_id is not None and data.novel_id != chapter.novel_id:
+
+            get_owned_novel(
+                db,
+                Novel,
+                data.novel_id,
+                user.id
+            )
+
+            chapter.novel_id = data.novel_id
+
+        chapter.title = data.title
+        chapter.content = data.content
 
         db.commit()
 
-        return {"message": "Chapter updated"}
+        return {
+            "message": "Chapter updated"
+        }
 
 
 @app.delete("/api/chapters/{chapter_id}")
-def delete_chapter(chapter_id: int = FastAPIPath(..., ge=1), idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
-    key = normalize_idempotency_key(idempotency_key)
+def delete_chapter(
+    chapter_id: int,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        return delete_with_idempotency(
+
+        chapter = get_owned_record(
             db,
-            key=key,
-            endpoint=f"DELETE:/api/chapters/{chapter_id}",
-            model_cls=Chapter,
-            resource_id=chapter_id,
-            not_found="Chapter not found",
-            message="Chapter deleted",
+            Chapter,
+            chapter_id,
+            user,
+            "Chapter"
         )
 
+        db.delete(chapter)
+        db.commit()
 
-# --------------------------------------------------
-# 9. WORLD MEMORY ROUTES
-# --------------------------------------------------
+        return {
+            "message": "Chapter deleted"
+        }
+
+
+# ==================================================
+# 15. WORLD MEMORY ROUTES
+# ==================================================
 
 @app.get("/api/memories")
-def list_memories():
+def list_memories(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
+
+        novel = resolve_novel(db, user, novel_id)
+
         memories = db.query(MemoryEntry).filter(
-            MemoryEntry.novel_id == 1
+            MemoryEntry.novel_id == novel.id
         ).all()
 
         return [
@@ -768,63 +956,103 @@ def list_memories():
 
 
 @app.post("/api/memories")
-def create_memory(data: MemoryInput, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
-    key = normalize_idempotency_key(idempotency_key)
+def create_memory(
+    data: MemoryInput,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        get_novel(db, data.novel_id)
-        return save_with_idempotency(
+
+        novel = resolve_novel(
             db,
-            key=key,
-            endpoint="POST:/api/memories",
-            model_cls=MemoryEntry,
-            create_kwargs={"name": data.name, "category": data.category, "description": data.description, "novel_id": data.novel_id},
-            update_fields={"name": data.name, "category": data.category, "description": data.description},
-            message="World memory saved",
+            user,
+            data.novel_id
         )
+
+        memory = MemoryEntry(
+            name=data.name,
+            category=data.category,
+            description=data.description,
+            novel_id=novel.id
+        )
+
+        db.add(memory)
+        db.commit()
+        db.refresh(memory)
+
+        return {
+            "message": "World memory saved",
+            "id": memory.id
+        }
 
 
 @app.put("/api/memories/{memory_id}")
-def update_memory(data: MemoryUpdate, memory_id: int = FastAPIPath(..., ge=1)):
+def update_memory(
+    memory_id: int,
+    data: MemoryUpdate,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        memory = db.query(MemoryEntry).filter(
-            MemoryEntry.id == memory_id
-        ).first()
 
-        if not memory:
-            raise HTTPException(404, "Memory not found")
+        memory = get_owned_record(
+            db,
+            MemoryEntry,
+            memory_id,
+            user,
+            "Memory"
+        )
 
-        for key, value in data.model_dump(exclude_unset=True).items():
+        for key, value in data.dict(exclude_unset=True).items():
             setattr(memory, key, value)
 
         db.commit()
 
-        return {"message": "Memory updated"}
+        return {
+            "message": "Memory updated"
+        }
 
 
 @app.delete("/api/memories/{memory_id}")
-def delete_memory(memory_id: int = FastAPIPath(..., ge=1), idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
-    key = normalize_idempotency_key(idempotency_key)
+def delete_memory(
+    memory_id: int,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        return delete_with_idempotency(
+
+        memory = get_owned_record(
             db,
-            key=key,
-            endpoint=f"DELETE:/api/memories/{memory_id}",
-            model_cls=MemoryEntry,
-            resource_id=memory_id,
-            not_found="Memory not found",
-            message="Memory deleted",
+            MemoryEntry,
+            memory_id,
+            user,
+            "Memory"
         )
 
+        db.delete(memory)
+        db.commit()
 
-# --------------------------------------------------
-# 10. CHARACTER ROUTES
-# --------------------------------------------------
+        return {
+            "message": "Memory deleted"
+        }
+
+
+# ==================================================
+# 16. CHARACTER ROUTES
+# ==================================================
 
 @app.get("/api/characters")
-def list_characters():
+def list_characters(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
+
+        novel = resolve_novel(db, user, novel_id)
+
         characters = db.query(Character).filter(
-            Character.novel_id == 1
+            Character.novel_id == novel.id
         ).all()
 
         return [
@@ -839,62 +1067,345 @@ def list_characters():
 
 
 @app.post("/api/characters")
-def create_character(data: CharacterInput, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
-    key = normalize_idempotency_key(idempotency_key)
+def create_character(
+    data: CharacterInput,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        get_novel(db, data.novel_id)
-        return save_with_idempotency(
+
+        novel = resolve_novel(
             db,
-            key=key,
-            endpoint="POST:/api/characters",
-            model_cls=Character,
-            create_kwargs={"name": data.name, "personality": data.personality, "description": data.description, "novel_id": data.novel_id},
-            update_fields={"name": data.name, "personality": data.personality, "description": data.description},
-            message="Character added",
+            user,
+            data.novel_id
         )
+
+        character = Character(
+            name=data.name,
+            personality=data.personality,
+            description=data.description,
+            novel_id=novel.id
+        )
+
+        db.add(character)
+        db.commit()
+        db.refresh(character)
+
+        return {
+            "message": "Character added",
+            "id": character.id
+        }
 
 
 @app.put("/api/characters/{character_id}")
-def update_character(data: CharacterUpdate, character_id: int = FastAPIPath(..., ge=1)):
+def update_character(
+    character_id: int,
+    data: CharacterUpdate,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        character = db.query(Character).filter(
-            Character.id == character_id
-        ).first()
 
-        if not character:
-            raise HTTPException(404, "Character not found")
+        character = get_owned_record(
+            db,
+            Character,
+            character_id,
+            user,
+            "Character"
+        )
 
-        for key, value in data.model_dump(exclude_unset=True).items():
+        for key, value in data.dict(exclude_unset=True).items():
             setattr(character, key, value)
 
         db.commit()
 
-        return {"message": "Character updated"}
+        return {
+            "message": "Character updated"
+        }
 
 
 @app.delete("/api/characters/{character_id}")
-def delete_character(character_id: int = FastAPIPath(..., ge=1), idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
-    key = normalize_idempotency_key(idempotency_key)
+def delete_character(
+    character_id: int,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        return delete_with_idempotency(
+
+        character = get_owned_record(
             db,
-            key=key,
-            endpoint=f"DELETE:/api/characters/{character_id}",
-            model_cls=Character,
-            resource_id=character_id,
-            not_found="Character not found",
-            message="Character deleted",
+            Character,
+            character_id,
+            user,
+            "Character"
         )
 
+        db.delete(character)
+        db.commit()
 
-# --------------------------------------------------
-# 11. AI: GRAMMAR AND WRITING CORRECTION
-# --------------------------------------------------
+        return {
+            "message": "Character deleted"
+        }
+
+# ==================================================
+# 16A. CHEKHOV'S GUN TRACKER
+# ==================================================
+
+@app.get("/api/chekhov")
+def list_story_threads(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, novel_id)
+
+        items = db.query(StoryThread).filter(
+            StoryThread.novel_id == novel.id
+        ).order_by(StoryThread.id.desc()).all()
+
+        return [
+            {
+                "id": item.id,
+                "title": item.title,
+                "first_appearance": item.first_appearance,
+                "status": item.status,
+                "notes": item.notes
+            }
+            for item in items
+        ]
+
+
+@app.post("/api/chekhov")
+def create_story_thread(
+    data: StoryThreadInput,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, data.novel_id)
+
+        item = StoryThread(
+            title=data.title,
+            first_appearance=data.first_appearance,
+            status=data.status,
+            notes=data.notes,
+            novel_id=novel.id
+        )
+
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+
+        return {"message": "Story thread added", "id": item.id}
+
+
+@app.put("/api/chekhov/{thread_id}")
+def update_story_thread(
+    thread_id: int,
+    data: StoryThreadUpdate,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        item = get_owned_record(
+            db, StoryThread, thread_id, user, "Story thread"
+        )
+
+        for key, value in data.dict(exclude_unset=True).items():
+            setattr(item, key, value)
+
+        db.commit()
+
+        return {"message": "Story thread updated"}
+
+
+@app.delete("/api/chekhov/{thread_id}")
+def delete_story_thread(
+    thread_id: int,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        item = get_owned_record(
+            db, StoryThread, thread_id, user, "Story thread"
+        )
+
+        db.delete(item)
+        db.commit()
+
+        return {"message": "Story thread deleted"}
+
+
+# ==================================================
+# 16B. CHARACTER RELATIONSHIP WEB
+# ==================================================
+
+@app.get("/api/relationships")
+def list_relationships(
+    novel_id: Optional[int] = None,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, novel_id)
+
+        items = db.query(CharacterRelationship).filter(
+            CharacterRelationship.novel_id == novel.id
+        ).all()
+
+        return [
+            {
+                "id": item.id,
+                "from_character": item.from_character_id,
+                "to_character": item.to_character_id,
+                "from_name": db.query(Character).filter(
+                    Character.id == item.from_character_id
+                ).first().name,
+                "to_name": db.query(Character).filter(
+                    Character.id == item.to_character_id
+                ).first().name,
+                "relationship_type": item.relationship_type,
+                "notes": item.notes
+            }
+            for item in items
+        ]
+
+
+@app.post("/api/relationships")
+def create_relationship(
+    data: RelationshipInput,
+    user=Depends(get_current_user)
+):
+    if data.from_character_id == data.to_character_id:
+        raise HTTPException(400, "A character cannot be related to itself.")
+
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, data.novel_id)
+
+        first = get_owned_record(
+            db, Character, data.from_character_id, user, "Character"
+        )
+        second = get_owned_record(
+            db, Character, data.to_character_id, user, "Character"
+        )
+
+        if first.novel_id != novel.id or second.novel_id != novel.id:
+            raise HTTPException(
+                400, "Both characters must belong to the selected novel."
+            )
+
+        item = CharacterRelationship(
+            novel_id=novel.id,
+            from_character_id=first.id,
+            to_character_id=second.id,
+            relationship_type=data.relationship_type,
+            notes=data.notes
+        )
+
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+
+        return {"message": "Relationship added", "id": item.id}
+
+
+@app.delete("/api/relationships/{relationship_id}")
+def delete_relationship(
+    relationship_id: int,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        item = get_owned_record(
+            db,
+            CharacterRelationship,
+            relationship_id,
+            user,
+            "Relationship"
+        )
+
+        db.delete(item)
+        db.commit()
+
+        return {"message": "Relationship deleted"}
+
+
+# ==================================================
+# 16C. NARRATIVE DNA ANALYSIS
+# ==================================================
+
+@app.post("/api/ai/narrative-dna")
+def analyze_narrative_dna(
+    data: NarrativeDNAInput,
+    user=Depends(get_current_user)
+):
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, data.novel_id)
+
+        if data.scope == "novel":
+            chapters = db.query(Chapter).filter(
+                Chapter.novel_id == novel.id
+            ).order_by(Chapter.id.asc()).all()
+
+            source_text = "\n\n".join(
+                f"{chapter.title}\n{chapter.content or ''}"
+                for chapter in chapters
+            )[-40000:]
+
+            if not source_text.strip():
+                raise HTTPException(400, "This novel has no chapters to analyze.")
+
+        else:
+            source_text = data.text.strip()
+
+            if not source_text:
+                raise HTTPException(400, "Please provide text to analyze.")
+
+        context = get_world_context(db, novel.id)
+
+    instructions = """
+You are the Narrative DNA analyst for Light Novel Buddy.
+
+Analyze the author's writing without rewriting it.
+
+Identify patterns supported by the supplied text.
+Do not invent details or make unsupported claims.
+
+Consider:
+- Writing voice and sentence structure
+- Vocabulary and descriptive habits
+- Dialogue patterns
+- Pacing and scene transitions
+- Themes and recurring motifs
+- Point of view and narrative distance
+
+Explain what is distinctive, what is consistent,
+and what the author could experiment with.
+
+Use clear headings and specific examples from the text.
+"""
+
+    prompt = f"""
+ANALYSIS FOCUS: {data.focus}
+
+ESTABLISHED STORY CONTEXT:
+{context}
+
+TEXT TO ANALYZE:
+{source_text}
+"""
+
+    return {
+        "result": ask_ai(instructions, prompt)
+            }
+    
+# ==================================================
+# 17. AI: GRAMMAR ASSISTANT
+# ==================================================
 
 @app.post("/api/ai/grammar")
-def grammar_assistant(data: AIInput):
+def grammar_assistant(
+    data: AIInput,
+    user=Depends(get_current_user)
+):
+
     with SessionLocal() as db:
-        get_novel(db, data.novel_id)
+        ai_context(db, user, data.novel_id)
 
     instructions = """
 You are the grammar and writing assistant of Light Novel Buddy.
@@ -918,20 +1429,25 @@ Text to review:
 {data.text}
 """
 
-    result = ask_ai(instructions, prompt, data.novel_id)
+    return {
+                "result": ask_ai(instructions, prompt)
+    }
 
-    return {"result": result}
 
-
-# --------------------------------------------------
-# 12. AI: STORY CONSISTENCY CHECKER
-# --------------------------------------------------
+# ==================================================
+# 18. AI: CONSISTENCY CHECKER
+# ==================================================
 
 @app.post("/api/ai/consistency")
-def consistency_checker(data: AIInput):
+def consistency_checker(
+    data: AIInput,
+    user=Depends(get_current_user)
+):
 
     # Labelled context so the model can point at the saved record it used.
     context, known_refs = build_world_context(data.novel_id, label=True)
+    with SessionLocal() as db:
+        _, context = ai_context(db, user, data.novel_id)
 
     instructions = """
 You are the story consistency checker of Light Novel Buddy.
@@ -957,6 +1473,9 @@ For every possible issue:
    point, say "no saved entry" instead of inventing a tag.
 3. Explain the conflicting established detail.
 4. Suggest a possible correction.
+1. Identify the relevant passage.
+2. Explain the conflicting established detail.
+3. Suggest a possible correction.
 
 Do not rewrite the chapter automatically.
 """
@@ -979,17 +1498,23 @@ NEW CHAPTER TO CHECK:
     return {
         "result": result,
         "references": reference_payload(tags, known_refs),
+    return {
+        "result": ask_ai(instructions, prompt)
     }
 
 
-# --------------------------------------------------
-# 13. AI: DESCRIPTIVE WRITING ASSISTANT
-# --------------------------------------------------
+# ==================================================
+# 19. AI: DESCRIPTION ASSISTANT
+# ==================================================
 
 @app.post("/api/ai/enrich")
-def description_assistant(data: AIInput):
+def description_assistant(
+    data: AIInput,
+    user=Depends(get_current_user)
+):
 
-    context = get_world_context(data.novel_id)
+    with SessionLocal() as db:
+        _, context = ai_context(db, user, data.novel_id)
 
     instructions = """
 You are the descriptive writing assistant of Light Novel Buddy.
@@ -1002,7 +1527,7 @@ You can improve:
 - Character descriptions and expressions
 - Magical and supernatural abilities
 - Atmosphere and mood
-- Action and battle scenes
+- Action scenes
 
 Preserve the author's original idea.
 Use established world information where relevant.
@@ -1021,19 +1546,23 @@ Original description:
 {data.text}
 """
 
-    result = ask_ai(instructions, prompt, data.novel_id)
+    return {
+        "result": ask_ai(instructions, prompt)
+    }
 
-    return {"result": result}
 
-
-# --------------------------------------------------
-# 14. AI: INTERACTIVE STORY DEVELOPMENT
-# --------------------------------------------------
+# ==================================================
+# 20. AI: STORY DEVELOPMENT
+# ==================================================
 
 @app.post("/api/ai/story")
-def story_development(data: AIInput):
+def story_development(
+    data: AIInput,
+    user=Depends(get_current_user)
+):
 
-    context = get_world_context(data.novel_id)
+    with SessionLocal() as db:
+        _, context = ai_context(db, user, data.novel_id)
 
     # `direction` already existed on the schema but was never used. It now carries
     # the directions the author selected plus any answers to follow-up questions,
@@ -1078,9 +1607,8 @@ Develop the selected directions further.
 You are the interactive story development assistant
 of Light Novel Buddy.
 
-Help the author explore possible directions for the story.
+Generate four distinct possible directions.
 
-Generate four distinct possibilities.
 Each possibility should include:
 - A short title
 - What happens next
@@ -1113,16 +1641,23 @@ Explore four possible directions.
     result = ask_ai(instructions, prompt, data.novel_id)
 
     return {"result": result, "mode": "refined" if refining else "explore"}
+    return {
+        "result": ask_ai(instructions, prompt)
+    }
 
 
-# --------------------------------------------------
-# 15. AI: CHARACTER DEVELOPMENT ASSISTANT
-# --------------------------------------------------
+# ==================================================
+# 21. AI: CHARACTER DEVELOPMENT
+# ==================================================
 
 @app.post("/api/ai/character")
-def character_development(data: AIInput):
+def character_development(
+    data: AIInput,
+    user=Depends(get_current_user)
+):
 
-    context = get_world_context(data.novel_id)
+    with SessionLocal() as db:
+        _, context = ai_context(db, user, data.novel_id)
 
     instructions = """
 You are the character development assistant of Light Novel Buddy.
@@ -1155,16 +1690,17 @@ Character information:
 Analyse this character and suggest ways to develop them.
 """
 
-    result = ask_ai(instructions, prompt, data.novel_id)
+    return {
+        "result": ask_ai(instructions, prompt)
+    }
 
-    return {"result": result}
 
-
-# --------------------------------------------------
-# 16. STARTUP INFORMATION
-# --------------------------------------------------
+# ==================================================
+# 22. DEVELOPMENT SERVER
+# ==================================================
 
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(

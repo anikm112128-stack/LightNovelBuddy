@@ -7,7 +7,17 @@ const $ = (id) => document.getElementById(id);
 
 let editingChapterId = null;
 
-// API REQUEST HANDLER
+const AUTH_TOKEN_KEY = "lnb_access_token";
+const SELECTED_NOVEL_KEY = "lnb_selected_novel";
+
+function getAccessToken() {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+function getSelectedNovelId() {
+    const id = Number(localStorage.getItem(SELECTED_NOVEL_KEY));
+    return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 function createRequestKey() {
     return (window.crypto && crypto.randomUUID)
@@ -16,62 +26,165 @@ function createRequestKey() {
 }
 
 function formatErrorDetail(result, status) {
-    if (typeof result?.detail === "string" && result.detail.trim()) return result.detail.trim();
+    if (typeof result?.detail === "string" && result.detail.trim()) {
+        return result.detail.trim();
+    }
+
     if (Array.isArray(result?.detail) && result.detail.length) {
         return result.detail.map(item => {
-            const msg = String(item?.msg || "Invalid input").replace(/^Value error,\s*/i, "").trim();
-            const loc = Array.isArray(item?.loc) ? item.loc.filter(p => !["body", "path", "header"].includes(p)).join(".") : "";
-            return loc && !msg.toLowerCase().includes(loc.replace(/_/g, " ").toLowerCase()) ? `${loc}: ${msg}` : msg;
+            const msg = String(item?.msg || "Invalid input")
+                .replace(/^Value error,\s*/i, "").trim();
+
+            const loc = Array.isArray(item?.loc)
+                ? item.loc.filter(p => !["body", "path", "header"].includes(p)).join(".")
+                : "";
+
+            return loc && !msg.toLowerCase().includes(loc.replace(/_/g, " ").toLowerCase())
+                ? `${loc}: ${msg}`
+                : msg;
         }).join("; ");
     }
-    if (status >= 502 && status <= 504) return `Server is temporarily unavailable (${status}). Please try again.`;
+
+    if (status >= 502 && status <= 504) {
+        return `Server is temporarily unavailable (${status}). Please try again.`;
+    }
+
     return "Server returned " + status;
 }
 
 async function request(path, method = "GET", data = null, { idempotencyKey = null } = {}) {
-    const headers = { "Content-Type": "application/json" };
-    if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+    const headers = {};
+    const token = getAccessToken();
+
+    const isPublicRoute =
+        path === "/" ||
+        path === "/api/health" ||
+        path === "/api/auth/login" ||
+        path === "/api/auth/register";
+
+    const isNovelManagementRoute = path.startsWith("/api/novels");
+
+    if (token && !isPublicRoute) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+
+    if (idempotencyKey) {
+        headers["Idempotency-Key"] = idempotencyKey;
+    }
+
+    let requestPath = path;
+    let requestData = data;
+
+    const novelId = getSelectedNovelId();
+
+    if (
+        !isPublicRoute &&
+        !isNovelManagementRoute &&
+        !path.startsWith("/api/auth/") &&
+        novelId
+    ) {
+        if (
+            method === "GET" &&
+            !/[?&]novel_id=/.test(requestPath) &&
+            !/^\/api\/(chapters|memories|characters)\/\d+$/.test(requestPath)
+        ) {
+            requestPath += (requestPath.includes("?") ? "&" : "?")
+                + `novel_id=${novelId}`;
+        } else if (
+            requestData &&
+            typeof requestData === "object" &&
+            !Array.isArray(requestData)
+        ) {
+            requestData = { ...requestData, novel_id: novelId };
+        }
+    }
 
     const timeoutMs = path.startsWith("/api/ai/") ? 60000 : 15000;
-    const canRetry = method === "GET" || method === "PUT" || method === "DELETE" || Boolean(idempotencyKey);
+    const canRetry =
+        method === "GET" ||
+        method === "PUT" ||
+        method === "DELETE" ||
+        Boolean(idempotencyKey);
+
     const maxAttempts = canRetry ? 2 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const controller = new AbortController();
         let timedOut = false;
-        const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+
+        const timer = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, timeoutMs);
+
         try {
-            const response = await fetch(API + path, {
+            const response = await fetch(API + requestPath, {
                 method,
-                headers,
-                body: data ? JSON.stringify(data) : undefined,
+                headers: {
+                    ...headers,
+                    ...(requestData ? { "Content-Type": "application/json" } : {})
+                },
+                body: requestData ? JSON.stringify(requestData) : undefined,
                 signal: controller.signal
             });
+
             clearTimeout(timer);
 
             let result = {};
-            try { result = await response.json(); } catch (e) {}
+
+            try {
+                result = await response.json();
+            } catch (e) {}
 
             if (!response.ok) {
-                const err = new Error(formatErrorDetail(result, response.status));
+                const err = new Error(
+                    formatErrorDetail(result, response.status)
+                );
+
                 err.status = response.status;
+
+                if (response.status === 401 && token) {
+                    localStorage.removeItem(AUTH_TOKEN_KEY);
+                }
+
                 throw err;
             }
-            if ($("backendStatus")) $("backendStatus").textContent = "● Backend connected";
+
+            if ($("backendStatus")) {
+                $("backendStatus").textContent = "● Backend connected";
+            }
+
             return result;
+
         } catch (err) {
             clearTimeout(timer);
+
             if (err && err.status) throw err;
-            if (timedOut) throw new Error("Request timed out. Please check your connection and try again.");
+
+            if (timedOut) {
+                throw new Error(
+                    "Request timed out. Please check your connection and try again."
+                );
+            }
+
             const offline = navigator.onLine === false;
+
             if (!offline && attempt < maxAttempts) {
                 await new Promise(resolve => setTimeout(resolve, 200));
                 continue;
             }
-            if ($("backendStatus")) $("backendStatus").textContent = offline ? "○ Offline" : "○ Backend unavailable";
-            throw new Error(offline
-                ? "You appear to be offline. Check your connection and try again."
-                : "Network error — could not reach the server. Please try again.");
+
+            if ($("backendStatus")) {
+                $("backendStatus").textContent = offline
+                    ? "○ Offline"
+                    : "○ Backend unavailable";
+            }
+
+            throw new Error(
+                offline
+                    ? "You appear to be offline. Check your connection and try again."
+                    : "Network error — could not reach the server. Please try again."
+            );
         }
     }
 }
@@ -255,17 +368,27 @@ function navigate(page) {
         grammar: "Grammar Assistant",
         consistency: "Consistency Checker",
         description: "Description Assistant",
-        story: "Story Development"
+        story: "Story Development",
+        chekhov: "Chekhov's Gun Tracker",
+        narrativeDNA: "Narrative DNA",
+        relationships: "Character Relationship Web"
     };
 
     $("pageTitle").textContent = titles[page] || "Light Novel Buddy";
     setMobileMenu(false);
-    if (menuWasOpen && window.matchMedia("(max-width: 760px)").matches) $("pageTitle").focus({ preventScroll: true });
+    if (menuWasOpen && window.matchMedia("(max-width: 760px)").matches) {
+        $("pageTitle").focus({ preventScroll: true });
+    }
 
     if (page === "dashboard") loadDashboard();
     if (page === "editor") loadChapters();
     if (page === "memory") loadMemories();
     if (page === "characters") loadCharacters();
+    if (page === "chekhov") loadChekhov();
+    if (page === "narrativeDNA") {
+        $("dnaResult").innerHTML = "";
+    }
+    if (page === "relationships") loadRelationships();
 }
 
 document.querySelectorAll(".nav").forEach(b => {
@@ -979,7 +1102,6 @@ async function loadChapters() {
     }
 }
 
-
 // Delete a saved chapter
 
 async function deleteChapter(id) {
@@ -1233,6 +1355,212 @@ async function deleteCharacter(id) {
         loadCharacters(); loadDashboard();
     } catch (e) { toast("Could not delete character: " + e.message); }
 }
+
+// CHEKHOV'S GUN TRACKER
+
+async function loadChekhov() {
+    try {
+        const items = await request("/api/chekhov");
+
+        $("chekhovList").innerHTML = items.length
+            ? items.map(item => `
+                <div class="item">
+                    <strong>${escapeHTML(item.title)}</strong>
+                    <span class="tag">${escapeHTML(item.status)}</span>
+                    <p>First appearance: ${escapeHTML(item.first_appearance || "Not specified")}</p>
+                    <p>${escapeHTML(item.notes || "")}</p>
+                    <button class="danger" onclick="deleteChekhov(${Number(item.id)})">
+                        Delete
+                    </button>
+                </div>
+            `).join("")
+            : '<div class="empty">No story threads recorded yet.</div>';
+
+    } catch (e) {
+        renderListError("chekhovList", "Could not load story threads", e, loadChekhov);
+    }
+}
+
+async function addChekhov() {
+    const title = $("chekhovTitle").value.trim();
+
+    if (!title) {
+        toast("Please enter a story element.");
+        return;
+    }
+
+    const button = $("addChekhovButton");
+    button.disabled = true;
+
+    try {
+        await request("/api/chekhov", "POST", {
+            title,
+            first_appearance: $("chekhovChapter").value.trim(),
+            status: $("chekhovStatus").value,
+            notes: $("chekhovNotes").value.trim()
+        });
+
+        $("chekhovTitle").value = "";
+        $("chekhovChapter").value = "";
+        $("chekhovNotes").value = "";
+        $("chekhovMessage").textContent = "Story thread added.";
+
+        toast("Story thread added.");
+        await loadChekhov();
+
+    } catch (e) {
+        $("chekhovMessage").textContent = "Could not add thread: " + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function deleteChekhov(id) {
+    if (!confirm("Delete this story thread?")) return;
+
+    try {
+        await request("/api/chekhov/" + id, "DELETE");
+        toast("Story thread deleted.");
+        await loadChekhov();
+    } catch (e) {
+        toast("Could not delete story thread: " + e.message);
+    }
+}
+
+
+// NARRATIVE DNA
+
+async function analyzeNarrativeDNA() {
+    const button = $("analyzeDNAButton");
+    if (button.disabled) return;
+
+    const scope = $("dnaScope").value;
+    const text = $("dnaText").value.trim();
+
+    if (scope === "excerpt" && !text) {
+        toast("Please enter some writing to analyze.");
+        return;
+    }
+
+    button.disabled = true;
+    $("dnaMessage").textContent = "Analyzing your writing...";
+    $("dnaResult").textContent = "";
+
+    try {
+        const result = await request("/api/ai/narrative-dna", "POST", {
+            text,
+            scope,
+            focus: $("dnaFocus").value
+        });
+
+        $("dnaResult").textContent = result.result || "No analysis returned.";
+        $("dnaMessage").textContent = "Analysis complete.";
+
+    } catch (e) {
+        $("dnaMessage").textContent = "Analysis failed: " + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+
+// CHARACTER RELATIONSHIP WEB
+
+async function loadRelationships() {
+    try {
+        await loadCharacters();
+
+        const from = $("relationshipFrom");
+        const to = $("relationshipTo");
+
+        const options = characters.map(character =>
+            `<option value="${Number(character.id)}">${escapeHTML(character.name)}</option>`
+        ).join("");
+
+        from.innerHTML = '<option value="">Select character</option>' + options;
+        to.innerHTML = '<option value="">Select character</option>' + options;
+
+        const relationships = await request("/api/relationships");
+
+        $("relationshipGraph").innerHTML = relationships.length
+            ? relationships.map(item => `
+                <div class="item">
+                    <strong>${escapeHTML(item.from_name)} → ${escapeHTML(item.to_name)}</strong>
+                    <span class="tag">${escapeHTML(item.relationship_type)}</span>
+                    <p>${escapeHTML(item.notes || "")}</p>
+                    <button class="danger" onclick="deleteRelationship(${Number(item.id)})">
+                        Remove
+                    </button>
+                </div>
+            `).join("")
+            : '<div class="empty">Add relationships to start building your character web.</div>';
+
+    } catch (e) {
+        renderListError(
+            "relationshipGraph",
+            "Could not load relationships",
+            e,
+            loadRelationships
+        );
+    }
+}
+
+async function addRelationship() {
+    const fromId = Number($("relationshipFrom").value);
+    const toId = Number($("relationshipTo").value);
+
+    if (!fromId || !toId) {
+        toast("Select both characters first.");
+        return;
+    }
+
+    if (fromId === toId) {
+        toast("Choose two different characters.");
+        return;
+    }
+
+    const button = $("addRelationshipButton");
+    button.disabled = true;
+
+    try {
+        await request("/api/relationships", "POST", {
+            from_character_id: fromId,
+            to_character_id: toId,
+            relationship_type: $("relationshipType").value,
+            notes: $("relationshipNotes").value.trim()
+        });
+
+        $("relationshipNotes").value = "";
+        $("relationshipMessage").textContent = "Relationship added.";
+
+        toast("Relationship added.");
+        await loadRelationships();
+
+    } catch (e) {
+        $("relationshipMessage").textContent = "Could not add relationship: " + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function deleteRelationship(id) {
+    if (!confirm("Remove this relationship?")) return;
+
+    try {
+        await request("/api/relationships/" + id, "DELETE");
+        toast("Relationship removed.");
+        await loadRelationships();
+    } catch (e) {
+        toast("Could not remove relationship: " + e.message);
+    }
+}
+
+
+// FEATURE BUTTON EVENTS
+
+$("addChekhovButton").addEventListener("click", addChekhov);
+$("analyzeDNAButton").addEventListener("click", analyzeNarrativeDNA);
+$("addRelationshipButton").addEventListener("click", addRelationship);
 
 // AI WRITING TOOLS
 
@@ -1741,4 +2069,3 @@ async function initialise() {
 }
 
 initialise();
-      

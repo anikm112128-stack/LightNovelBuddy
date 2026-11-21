@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,12 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Light Novel Buddy | Your Writing Studio</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        [hidden] { display: none !important; }
+        .feature-form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 14px;
+        }
+        .feature-form-grid > div { min-width: 0; }
+        .account-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .account-controls select { max-width: 220px; }
+        .auth-screen {
+            position: relative;
+            z-index: 20;
+        }
+        .auth-card [hidden] { display: none !important; }
+        @media (max-width: 640px) {
+            .account-controls { width: 100%; }
+            .account-controls select {
+                flex: 1;
+                min-width: 140px;
+            }
+        }
+    </style>
 </head>
 
 <body>
 
-    <div class="app" id="appRoot">
-    <!-- Authentication screen -->
+<div class="app" id="appRoot">
+
+    <!-- Authentication -->
     <section id="authScreen" class="auth-screen" hidden>
         <form id="loginForm" class="auth-card">
             <p class="eyebrow">LIGHT NOVEL BUDDY</p>
@@ -36,14 +64,41 @@
 
             <button class="action" type="submit">Sign in</button>
 
-            <p id="authMessage" role="status"></p>
+            <div id="registerFields" hidden>
+                <label for="registerPassword">Create password</label>
+                <input
+                    id="registerPassword"
+                    type="password"
+                    autocomplete="new-password"
+                    minlength="10"
+                >
+
+                <label for="confirmPassword">Confirm password</label>
+                <input
+                    id="confirmPassword"
+                    type="password"
+                    autocomplete="new-password"
+                    minlength="10"
+                >
+            </div>
+
+            <p id="authMessage" role="status" aria-live="polite"></p>
+
+            <button class="action" id="registerSubmit" type="submit" hidden>
+                Create account
+            </button>
 
             <button class="ghost" id="showRegister" type="button">
                 Create an account
             </button>
+
+            <button class="ghost" id="showLogin" type="button" hidden>
+                Back to sign in
+            </button>
         </form>
     </section>
 
+    <!-- Main application -->
     <div class="app">
 
         <aside class="sidebar">
@@ -53,9 +108,18 @@
                 <small>YOUR PERSONAL WRITING STUDIO</small>
             </div>
 
-            <button class="mobile-menu-toggle ghost" id="mobileMenuToggle" type="button" aria-expanded="false" aria-controls="sidebarMenu">Menu</button>
+            <button
+                class="mobile-menu-toggle ghost"
+                id="mobileMenuToggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="sidebarMenu"
+            >
+                Menu
+            </button>
 
             <div class="sidebar-menu" id="sidebarMenu">
+
                 <div class="nav-label">WORKSPACE</div>
 
                 <button class="nav active" data-page="dashboard" aria-current="page">
@@ -74,6 +138,18 @@
 
                 <button class="nav" data-page="characters">
                     Characters
+                </button>
+
+                <button class="nav" data-page="chekhov">
+                    Chekhov's Gun Tracker
+                </button>
+
+                <button class="nav" data-page="narrativeDNA">
+                    Narrative DNA
+                </button>
+
+                <button class="nav" data-page="relationships">
+                    Relationship Web
                 </button>
 
                 <div class="nav-label">WRITING ASSISTANTS</div>
@@ -103,12 +179,13 @@
                         Your story. Your choices. Your world.
                     </p>
                 </div>
-            </div>
 
+            </div>
         </aside>
 
         <main class="main">
 
+            <!-- Top bar -->
             <div class="topbar">
 
                 <div>
@@ -135,18 +212,14 @@
                     </button>
                 </div>
 
-                <span class="tag">
-                    Your writing space
-                </span>
+                <span class="tag">Your writing space</span>
 
             </div>
 
             <!-- Dashboard -->
-
             <section class="page active" id="dashboard">
 
                 <div class="hero">
-
                     <div class="eyebrow">
                         THE NEXT CHAPTER STARTS HERE
                     </div>
@@ -163,7 +236,6 @@
                     <button class="action" onclick="navigate('editor')">
                         Start writing
                     </button>
-
                 </div>
 
                 <div class="grid">
@@ -292,7 +364,6 @@
             </section>
 
             <!-- Chapter Editor -->
-
             <section class="page" id="editor">
 
                 <div class="card">
@@ -336,6 +407,12 @@
                     </div>
 
                     <div class="editor-status" id="editStatus" role="status" aria-live="polite"></div>
+                    <div
+                        class="editor-status"
+                        id="editStatus"
+                        role="status"
+                        aria-live="polite"
+                    ></div>
 
                     <div class="row">
 
@@ -389,7 +466,6 @@
             </section>
 
             <!-- World Memory -->
-
             <section class="page" id="memory">
 
                 <div class="card">
@@ -432,7 +508,15 @@
                     <button class="action" id="saveMemoryButton" onclick="addMemory()">
                         Save to world memory
                     </button>
-                    <button class="ghost" id="cancelMemoryButton" onclick="cancelMemoryEdit()" hidden>Cancel editing</button>
+
+                    <button
+                        class="ghost"
+                        id="cancelMemoryButton"
+                        onclick="cancelMemoryEdit()"
+                        hidden
+                    >
+                        Cancel editing
+                    </button>
 
                 </div>
 
@@ -449,7 +533,6 @@
             </section>
 
             <!-- Characters -->
-
             <section class="page" id="characters">
 
                 <div class="card">
@@ -489,7 +572,15 @@
                     <button class="action" id="saveCharacterButton" onclick="addCharacter()">
                         Add character
                     </button>
-                    <button class="ghost" id="cancelCharacterButton" onclick="cancelCharacterEdit()" hidden>Cancel editing</button>
+
+                    <button
+                        class="ghost"
+                        id="cancelCharacterButton"
+                        onclick="cancelCharacterEdit()"
+                        hidden
+                    >
+                        Cancel editing
+                    </button>
 
                 </div>
 
@@ -528,7 +619,6 @@
             </section>
 
             <!-- Grammar Assistant -->
-
             <section class="page" id="grammar">
 
                 <div class="card">
@@ -567,7 +657,6 @@
             </section>
 
             <!-- Consistency Checker -->
-
             <section class="page" id="consistency">
 
                 <div class="card">
@@ -598,7 +687,6 @@
             </section>
 
             <!-- Description Assistant -->
-
             <section class="page" id="description">
 
                 <div class="card">
@@ -638,7 +726,6 @@
             </section>
 
             <!-- Story Development -->
-
             <section class="page" id="story">
 
                 <div class="card">
@@ -716,6 +803,212 @@
 
             </section>
 
+            <!-- Chekhov's Gun Tracker -->
+            <section class="page" id="chekhov">
+
+                <div class="card">
+
+                    <div class="eyebrow">PLANT IT. DEVELOP IT. PAY IT OFF.</div>
+
+                    <h2>Chekhov's Gun Tracker</h2>
+
+                    <p>
+                        Keep track of story details that may matter later,
+                        and whether they have been resolved.
+                    </p>
+
+                    <div class="feature-form-grid">
+
+                        <div>
+                            <label for="chekhovTitle">Setup or story detail</label>
+                            <input
+                                id="chekhovTitle"
+                                placeholder="e.g. The silver key hidden beneath the floor"
+                            >
+                        </div>
+
+                        <div>
+                            <label for="chekhovChapter">First appearance</label>
+                            <input
+                                id="chekhovChapter"
+                                placeholder="e.g. Chapter 3"
+                            >
+                        </div>
+
+                        <div>
+                            <label for="chekhovStatus">Status</label>
+                            <select id="chekhovStatus">
+                                <option value="planted">Planted</option>
+                                <option value="developing">Developing</option>
+                                <option value="paid">Paid off</option>
+                                <option value="abandoned">Abandoned</option>
+                            </select>
+                        </div>
+
+                    </div>
+
+                    <label for="chekhovNotes">Notes and intended payoff</label>
+
+                    <textarea
+                        id="chekhovNotes"
+                        placeholder="Why does this detail matter? What might it lead to?"
+                    ></textarea>
+
+                    <button class="action" id="addChekhovButton" type="button">
+                        Add story thread
+                    </button>
+
+                    <p class="small" id="chekhovMessage" role="status">
+                        Tracker interface added.
+                    </p>
+
+                </div>
+
+                <div class="section-head">
+                    <h2>Tracked story threads</h2>
+                </div>
+
+                <div class="card" id="chekhovList">
+                    <div class="empty">
+                        Your planted details and unresolved story threads will appear here.
+                    </div>
+                </div>
+
+            </section>
+
+            <!-- Narrative DNA -->
+            <section class="page" id="narrativeDNA">
+
+                <div class="card">
+
+                    <div class="eyebrow">UNDERSTAND YOUR STORY'S VOICE</div>
+
+                    <h2>Narrative DNA</h2>
+
+                    <p>
+                        Explore recurring patterns in your prose, pacing, themes,
+                        dialogue, and point of view.
+                    </p>
+
+                    <label for="dnaText">Text to analyze</label>
+
+                    <textarea
+                        id="dnaText"
+                        placeholder="Paste a chapter or a substantial excerpt from your novel..."
+                        style="min-height:260px"
+                    ></textarea>
+
+                    <div class="feature-form-grid">
+
+                        <div>
+                            <label for="dnaScope">Analysis scope</label>
+                            <select id="dnaScope">
+                                <option value="excerpt">This excerpt</option>
+                                <option value="novel">Selected novel</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="dnaFocus">Focus</label>
+                            <select id="dnaFocus">
+                                <option value="full">Full narrative profile</option>
+                                <option value="style">Writing style and voice</option>
+                                <option value="pacing">Pacing and structure</option>
+                                <option value="themes">Themes and motifs</option>
+                            </select>
+                        </div>
+
+                    </div>
+
+                    <button class="action" id="analyzeDNAButton" type="button">
+                        Analyze narrative DNA
+                    </button>
+
+                    <p class="small" id="dnaMessage" role="status">
+                        Ready to analyze your writing.
+                    </p>
+
+                    <div id="dnaResult" aria-live="polite"></div>
+
+                </div>
+
+            </section>
+
+            <!-- Character Relationship Web -->
+            <section class="page" id="relationships">
+
+                <div class="card">
+
+                    <div class="eyebrow">MAP THE PEOPLE IN YOUR STORY</div>
+
+                    <h2>Character Relationship Web</h2>
+
+                    <p>
+                        Record how characters are connected, how they feel about each other,
+                        and how those relationships change.
+                    </p>
+
+                    <div class="feature-form-grid">
+
+                        <div>
+                            <label for="relationshipFrom">Character A</label>
+                            <select id="relationshipFrom">
+                                <option value="">Choose a character</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="relationshipTo">Character B</label>
+                            <select id="relationshipTo">
+                                <option value="">Choose a character</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="relationshipType">Relationship</label>
+                            <select id="relationshipType">
+                                <option>Friends</option>
+                                <option>Family</option>
+                                <option>Rivals</option>
+                                <option>Enemies</option>
+                                <option>Mentor and student</option>
+                                <option>Allies</option>
+                                <option>Complicated</option>
+                                <option>Other</option>
+                            </select>
+                        </div>
+
+                    </div>
+
+                    <label for="relationshipNotes">Details</label>
+
+                    <textarea
+                        id="relationshipNotes"
+                        placeholder="Describe the history, tension, trust, or changes between them..."
+                    ></textarea>
+
+                    <button class="action" id="addRelationshipButton" type="button">
+                        Add relationship
+                    </button>
+
+                    <p class="small" id="relationshipMessage" role="status">
+                        Ready to add character relationships.
+                    </p>
+
+                </div>
+
+                <div class="section-head">
+                    <h2>Relationship map</h2>
+                </div>
+
+                <div class="card" id="relationshipGraph">
+                    <div class="empty">
+                        Add characters and relationships to build your story's connection map.
+                    </div>
+                </div>
+
+            </section>
+
             <footer>
                 Made for storytellers, by storytellers.
             </footer>
@@ -728,6 +1021,7 @@
 
     <!-- Chapter viewer: kept outside #appRoot so it stays interactive while the app is inert -->
 
+    <!-- Chapter viewer -->
     <div
         class="chapter-modal"
         id="chapterModal"
@@ -775,5 +1069,6 @@
     <script src="script.js" defer></script>
     <script src="auth.js" defer></script>
 
+</div>
 </body>
 </html>
