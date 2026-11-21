@@ -3,11 +3,15 @@ const AxeBuilder = require('@axe-core/playwright').default;
 
 // Never contact the deployed API: each test gets a fresh in-memory backend.
 async function mockApi(page) {
-    const state = { chapters: [], memories: [], characters: [], nextId: 1, failChapterSave: false, failChapterGet: false, delayChapterSave: 0, chapterPosts: 0 };
+    const state = { chapters: [], memories: [], characters: [], idempotency: {}, nextId: 1, failChapterSave: false, failChapterGet: false, dropNextSaveResponse: false, validationError: null, delayChapterSave: 0, chapterPosts: 0 };
     await page.route('https://lightnovelbuddy.onrender.com/**', async route => {
         const req = route.request();
         const path = new URL(req.url()).pathname;
         const method = req.method();
+        if (method === 'OPTIONS') {
+            await route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': '*', 'Access-Control-Allow-Headers': '*' } });
+            return;
+        }
         let status = 200, body = {};
         if (path === '/api/health') body = { status: 'online' };
         else if (path === '/api/dashboard') body = {
@@ -23,6 +27,7 @@ async function mockApi(page) {
                 const [, resource, id] = match;
                 const items = state[resource];
                 const index = items.findIndex(item => item.id === Number(id));
+                const idemKey = req.headers()['idempotency-key'];
                 if (method === 'GET' && !id) body = [...items].reverse();
                 else if (method === 'GET' && index >= 0 && resource === 'chapters' && state.failChapterGet) { status = 503; body = { detail: 'Simulated failure' }; }
                 else if (method === 'GET' && index >= 0) body = items[index];
@@ -31,14 +36,28 @@ async function mockApi(page) {
                         state.chapterPosts++;
                         if (state.delayChapterSave) await new Promise(resolve => setTimeout(resolve, state.delayChapterSave));
                     }
-                    if (resource === 'chapters' && state.failChapterSave) { status = 503; body = { detail: 'Simulated failure' }; }
-                    else { const item = { ...req.postDataJSON(), id: state.nextId++ }; items.push(item); body = { id: item.id }; }
+                    if (state.validationError) { status = 422; body = { detail: state.validationError }; }
+                    else if (resource === 'chapters' && state.failChapterSave) { status = 503; body = { detail: 'Simulated failure' }; }
+                    else if (idemKey && state.idempotency[idemKey]) {
+                        Object.assign(state.idempotency[idemKey], req.postDataJSON());
+                        body = { id: state.idempotency[idemKey].id };
+                    } else {
+                        const item = { ...req.postDataJSON(), id: state.nextId++ };
+                        items.push(item);
+                        if (idemKey) state.idempotency[idemKey] = item;
+                        body = { id: item.id };
+                        if (state.dropNextSaveResponse) {
+                            state.dropNextSaveResponse = false;
+                            await route.abort('connectionreset');
+                            return;
+                        }
+                    }
                 } else if (method === 'PUT' && index >= 0) { Object.assign(items[index], req.postDataJSON()); body = { message: 'Updated' }; }
                 else if (method === 'DELETE' && index >= 0) { items.splice(index, 1); body = { message: 'Deleted' }; }
                 else { status = 404; body = { detail: 'Not found' }; }
             }
         }
-        await route.fulfill({ status, json: body, headers: { 'Access-Control-Allow-Origin': '*' } });
+        await route.fulfill({ status, json: body, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' } });
     });
     return state;
 }
@@ -169,3 +188,51 @@ test('automated accessibility checks on each section', async ({ page }) => {
         expect(results.violations, section).toEqual([]);
     }
 });
+
+test('safely retries without duplicates when a save response is lost after server saved', async ({ page }) => {
+    const api = await mockApi(page); api.dropNextSaveResponse = true;
+    await open(page); await nav(page, 'editor');
+    await page.locator('#chapterTitle').fill('Lost response chapter');
+    await page.locator('#chapterText').fill('Saved once despite dropped response.');
+    await page.locator('#saveChapterButton').click();
+    await expect(page.locator('#chapterList')).toContainText('Lost response chapter');
+    expect(api.chapterPosts).toBe(2);
+    expect(api.chapters).toHaveLength(1);
+});
+
+test('formats validation array errors and recovers if edited chapter was deleted', async ({ page }) => {
+    const api = await mockApi(page);
+    api.validationError = [{ loc: ['body', 'title'], msg: 'Value error, Chapter title cannot be blank.' }];
+    await open(page); await nav(page, 'editor');
+    await page.locator('#chapterTitle').fill('Valid locally');
+    await page.locator('#saveChapterButton').click();
+    await expect(page.locator('#toast')).toContainText('Chapter title cannot be blank.');
+    await expect(page.locator('#toast')).not.toContainText('[object Object]');
+    api.validationError = null;
+    api.chapters.push({ id: 50, title: 'Deleted externally', content: 'Original' });
+    await nav(page, 'editor');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#chapterList').getByRole('button', { name: 'Edit' }).click();
+    api.chapters.length = 0;
+    await page.locator('#chapterText').fill('Keep my 2000 words');
+    await page.locator('#saveChapterButton').click();
+    await expect(page.locator('#saveChapterButton')).toHaveText('Save chapter');
+    await page.locator('#saveChapterButton').click();
+    expect(api.chapters).toHaveLength(1);
+    expect(api.chapters[0].content).toBe('Keep my 2000 words');
+});
+
+test('narrow mobile viewports handle long unbroken text and Escape closes mobile menu', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    const api = await mockApi(page);
+    api.chapters.push({ id: 1, title: 'A'.repeat(120), content: 'B'.repeat(260) });
+    await open(page);
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await expect(page.locator('#mobileMenuToggle')).toHaveAttribute('aria-expanded', 'true');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#mobileMenuToggle')).toHaveAttribute('aria-expanded', 'false');
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await nav(page, 'editor');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+

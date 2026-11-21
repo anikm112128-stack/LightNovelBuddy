@@ -1,11 +1,12 @@
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Path as FastAPIPath
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import (
     create_engine,
     Column,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     Text,
     ForeignKey,
 )
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from adaption import Adaption
 
@@ -108,6 +110,16 @@ class Character(Base):
     novel = relationship("Novel", back_populates="characters")
 
 
+class IdempotencyRecord(Base):
+    __tablename__ = "idempotency_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(128), nullable=False, unique=True, index=True)
+    endpoint = Column(String(128), nullable=False)
+    resource_id = Column(Integer, nullable=False)
+    created_at = Column(Integer, nullable=False)
+
+
 Base.metadata.create_all(bind=engine)
 
 
@@ -144,49 +156,258 @@ app.add_middleware(
 # 4. REQUEST SCHEMAS
 # --------------------------------------------------
 
+def _clean_text(value: object, label: str, *, required: bool = False, strip: bool = False, max_len: int = 50_000) -> str:
+    if value is None:
+        raise ValueError(f"{label} cannot be null.")
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be text.")
+    if "\x00" in value:
+        raise ValueError(f"{label} contains invalid characters.")
+    cleaned = value.strip() if (required or strip) else value
+    if required and not cleaned:
+        raise ValueError(f"{label} cannot be blank.")
+    if len(cleaned) > max_len:
+        raise ValueError(f"{label} must be {max_len} characters or fewer.")
+    return cleaned
+
+
+def _clean_novel_id(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("novel_id must be a positive integer.")
+    return value
+
+
+class _UpdateBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one field must be provided for update.")
+        return self
+
+
 class ChapterInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str
     content: str = ""
     novel_id: int = 1
 
+    @field_validator("title", mode="before")
+    @classmethod
+    def check_title(cls, v): return _clean_text(v, "Chapter title", required=True, max_len=300)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def check_content(cls, v): return _clean_text(v, "Chapter content", max_len=500_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
+
+class ChapterUpdate(_UpdateBase):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def check_title(cls, v): return _clean_text(v, "Chapter title", required=True, max_len=300)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def check_content(cls, v): return _clean_text(v, "Chapter content", max_len=500_000)
+
 
 class MemoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     category: str = "General"
     description: str = ""
     novel_id: int = 1
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "World entry name", required=True, max_len=200)
 
-class MemoryUpdate(BaseModel):
+    @field_validator("category", mode="before")
+    @classmethod
+    def check_category(cls, v): return _clean_text(v, "Category", required=True, max_len=100)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
+
+class MemoryUpdate(_UpdateBase):
     name: Optional[str] = None
     category: Optional[str] = None
     description: Optional[str] = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "World entry name", required=True, max_len=200)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def check_category(cls, v): return _clean_text(v, "Category", required=True, max_len=100)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
+
 
 class CharacterInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     personality: str = ""
     description: str = ""
     novel_id: int = 1
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "Character name", required=True, max_len=200)
 
-class CharacterUpdate(BaseModel):
+    @field_validator("personality", mode="before")
+    @classmethod
+    def check_personality(cls, v): return _clean_text(v, "Personality", strip=True, max_len=500)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
+
+class CharacterUpdate(_UpdateBase):
     name: Optional[str] = None
     personality: Optional[str] = None
     description: Optional[str] = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v): return _clean_text(v, "Character name", required=True, max_len=200)
+
+    @field_validator("personality", mode="before")
+    @classmethod
+    def check_personality(cls, v): return _clean_text(v, "Personality", strip=True, max_len=500)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def check_description(cls, v): return _clean_text(v, "Description", max_len=50_000)
+
 
 class AIInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     text: str
     novel_id: int = 1
     style: str = ""
     direction: str = ""
     idea: str = ""
 
+    @field_validator("text", mode="before")
+    @classmethod
+    def check_text(cls, v): return _clean_text(v, "Text", required=True, max_len=100_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
+    @field_validator("style", mode="before")
+    @classmethod
+    def check_style(cls, v): return _clean_text(v, "Style", strip=True, max_len=200)
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def check_direction(cls, v): return _clean_text(v, "Direction", strip=True, max_len=500)
+
+    @field_validator("idea", mode="before")
+    @classmethod
+    def check_idea(cls, v): return _clean_text(v, "Idea", strip=True, max_len=2_000)
+
 
 # --------------------------------------------------
 # 5. DATABASE HELPERS
 # --------------------------------------------------
+
+def normalize_idempotency_key(raw_key: Optional[str]) -> Optional[str]:
+    if raw_key is None:
+        return None
+    cleaned = raw_key.strip()
+    if not cleaned or len(cleaned) > 128 or "\x00" in raw_key:
+        raise HTTPException(status_code=422, detail="Invalid Idempotency-Key header.")
+    return cleaned
+
+
+def save_with_idempotency(db, *, key: Optional[str], endpoint: str, model_cls, create_kwargs: dict, update_fields: dict, message: str):
+    now = int(time.time())
+    if key:
+        db.query(IdempotencyRecord).filter(IdempotencyRecord.created_at < now - 7 * 86400).delete(synchronize_session=False)
+        existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key).first()
+        if existing:
+            if existing.endpoint != endpoint:
+                raise HTTPException(status_code=409, detail="Idempotency-Key already used for another endpoint.")
+            item = db.query(model_cls).filter(model_cls.id == existing.resource_id).first()
+            if item:
+                for attr, val in update_fields.items():
+                    setattr(item, attr, val)
+                db.commit()
+                return {"message": message, "id": item.id}
+            db.delete(existing)
+            db.flush()
+
+    item = model_cls(**create_kwargs)
+    db.add(item)
+    try:
+        db.flush()
+        if key:
+            db.add(IdempotencyRecord(key=key, endpoint=endpoint, resource_id=item.id, created_at=now))
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if key:
+            existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key, IdempotencyRecord.endpoint == endpoint).first()
+            if existing:
+                winner = db.query(model_cls).filter(model_cls.id == existing.resource_id).first()
+                if winner:
+                    return {"message": message, "id": winner.id}
+        raise HTTPException(status_code=409, detail="Duplicate conflicting request.")
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Database error while saving changes.")
+
+    db.refresh(item)
+    return {"message": message, "id": item.id}
+
+
+def delete_with_idempotency(db, *, key: Optional[str], endpoint: str, model_cls, resource_id: int, not_found: str, message: str):
+    now = int(time.time())
+    if key:
+        existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.key == key).first()
+        if existing:
+            if existing.endpoint != endpoint:
+                raise HTTPException(status_code=409, detail="Idempotency-Key already used for another endpoint.")
+            return {"message": message}
+
+    item = db.query(model_cls).filter(model_cls.id == resource_id).first()
+    if not item:
+        raise HTTPException(404, not_found)
+
+    db.delete(item)
+    if key:
+        db.add(IdempotencyRecord(key=key, endpoint=endpoint, resource_id=resource_id, created_at=now))
+    db.commit()
+    return {"message": message}
 
 def get_novel(db, novel_id):
     novel = db.query(Novel).filter(
@@ -206,6 +427,8 @@ def get_world_context(novel_id=1):
     """Collect saved lore and recent chapters for AI context."""
 
     with SessionLocal() as db:
+        get_novel(db, novel_id)
+
         memories = db.query(MemoryEntry).filter(
             MemoryEntry.novel_id == novel_id
         ).all()
@@ -372,28 +595,23 @@ def list_chapters():
 
 
 @app.post("/api/chapters")
-def create_chapter(data: ChapterInput):
+def create_chapter(data: ChapterInput, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
+    key = normalize_idempotency_key(idempotency_key)
     with SessionLocal() as db:
         get_novel(db, data.novel_id)
-
-        chapter = Chapter(
-            title=data.title,
-            content=data.content,
-            novel_id=data.novel_id
+        return save_with_idempotency(
+            db,
+            key=key,
+            endpoint="POST:/api/chapters",
+            model_cls=Chapter,
+            create_kwargs={"title": data.title, "content": data.content, "novel_id": data.novel_id},
+            update_fields={"title": data.title, "content": data.content},
+            message="Chapter saved",
         )
-
-        db.add(chapter)
-        db.commit()
-        db.refresh(chapter)
-
-        return {
-            "message": "Chapter saved",
-            "id": chapter.id
-        }
 
 
 @app.get("/api/chapters/{chapter_id}")
-def get_chapter(chapter_id: int):
+def get_chapter(chapter_id: int = FastAPIPath(..., ge=1)):
     with SessionLocal() as db:
         chapter = db.query(Chapter).filter(
             Chapter.id == chapter_id
@@ -410,7 +628,7 @@ def get_chapter(chapter_id: int):
 
 
 @app.put("/api/chapters/{chapter_id}")
-def update_chapter(chapter_id: int, data: ChapterInput):
+def update_chapter(data: ChapterUpdate, chapter_id: int = FastAPIPath(..., ge=1)):
     with SessionLocal() as db:
         chapter = db.query(Chapter).filter(
             Chapter.id == chapter_id
@@ -419,8 +637,8 @@ def update_chapter(chapter_id: int, data: ChapterInput):
         if not chapter:
             raise HTTPException(404, "Chapter not found")
 
-        chapter.title = data.title
-        chapter.content = data.content
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(chapter, key, value)
 
         db.commit()
 
@@ -428,19 +646,18 @@ def update_chapter(chapter_id: int, data: ChapterInput):
 
 
 @app.delete("/api/chapters/{chapter_id}")
-def delete_chapter(chapter_id: int):
+def delete_chapter(chapter_id: int = FastAPIPath(..., ge=1), idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
+    key = normalize_idempotency_key(idempotency_key)
     with SessionLocal() as db:
-        chapter = db.query(Chapter).filter(
-            Chapter.id == chapter_id
-        ).first()
-
-        if not chapter:
-            raise HTTPException(404, "Chapter not found")
-
-        db.delete(chapter)
-        db.commit()
-
-        return {"message": "Chapter deleted"}
+        return delete_with_idempotency(
+            db,
+            key=key,
+            endpoint=f"DELETE:/api/chapters/{chapter_id}",
+            model_cls=Chapter,
+            resource_id=chapter_id,
+            not_found="Chapter not found",
+            message="Chapter deleted",
+        )
 
 
 # --------------------------------------------------
@@ -466,29 +683,23 @@ def list_memories():
 
 
 @app.post("/api/memories")
-def create_memory(data: MemoryInput):
+def create_memory(data: MemoryInput, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
+    key = normalize_idempotency_key(idempotency_key)
     with SessionLocal() as db:
         get_novel(db, data.novel_id)
-
-        memory = MemoryEntry(
-            name=data.name,
-            category=data.category,
-            description=data.description,
-            novel_id=data.novel_id
+        return save_with_idempotency(
+            db,
+            key=key,
+            endpoint="POST:/api/memories",
+            model_cls=MemoryEntry,
+            create_kwargs={"name": data.name, "category": data.category, "description": data.description, "novel_id": data.novel_id},
+            update_fields={"name": data.name, "category": data.category, "description": data.description},
+            message="World memory saved",
         )
-
-        db.add(memory)
-        db.commit()
-        db.refresh(memory)
-
-        return {
-            "message": "World memory saved",
-            "id": memory.id
-        }
 
 
 @app.put("/api/memories/{memory_id}")
-def update_memory(memory_id: int, data: MemoryUpdate):
+def update_memory(data: MemoryUpdate, memory_id: int = FastAPIPath(..., ge=1)):
     with SessionLocal() as db:
         memory = db.query(MemoryEntry).filter(
             MemoryEntry.id == memory_id
@@ -506,19 +717,18 @@ def update_memory(memory_id: int, data: MemoryUpdate):
 
 
 @app.delete("/api/memories/{memory_id}")
-def delete_memory(memory_id: int):
+def delete_memory(memory_id: int = FastAPIPath(..., ge=1), idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
+    key = normalize_idempotency_key(idempotency_key)
     with SessionLocal() as db:
-        memory = db.query(MemoryEntry).filter(
-            MemoryEntry.id == memory_id
-        ).first()
-
-        if not memory:
-            raise HTTPException(404, "Memory not found")
-
-        db.delete(memory)
-        db.commit()
-
-        return {"message": "Memory deleted"}
+        return delete_with_idempotency(
+            db,
+            key=key,
+            endpoint=f"DELETE:/api/memories/{memory_id}",
+            model_cls=MemoryEntry,
+            resource_id=memory_id,
+            not_found="Memory not found",
+            message="Memory deleted",
+        )
 
 
 # --------------------------------------------------
@@ -544,29 +754,23 @@ def list_characters():
 
 
 @app.post("/api/characters")
-def create_character(data: CharacterInput):
+def create_character(data: CharacterInput, idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
+    key = normalize_idempotency_key(idempotency_key)
     with SessionLocal() as db:
         get_novel(db, data.novel_id)
-
-        character = Character(
-            name=data.name,
-            personality=data.personality,
-            description=data.description,
-            novel_id=data.novel_id
+        return save_with_idempotency(
+            db,
+            key=key,
+            endpoint="POST:/api/characters",
+            model_cls=Character,
+            create_kwargs={"name": data.name, "personality": data.personality, "description": data.description, "novel_id": data.novel_id},
+            update_fields={"name": data.name, "personality": data.personality, "description": data.description},
+            message="Character added",
         )
-
-        db.add(character)
-        db.commit()
-        db.refresh(character)
-
-        return {
-            "message": "Character added",
-            "id": character.id
-        }
 
 
 @app.put("/api/characters/{character_id}")
-def update_character(character_id: int, data: CharacterUpdate):
+def update_character(data: CharacterUpdate, character_id: int = FastAPIPath(..., ge=1)):
     with SessionLocal() as db:
         character = db.query(Character).filter(
             Character.id == character_id
@@ -584,19 +788,18 @@ def update_character(character_id: int, data: CharacterUpdate):
 
 
 @app.delete("/api/characters/{character_id}")
-def delete_character(character_id: int):
+def delete_character(character_id: int = FastAPIPath(..., ge=1), idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
+    key = normalize_idempotency_key(idempotency_key)
     with SessionLocal() as db:
-        character = db.query(Character).filter(
-            Character.id == character_id
-        ).first()
-
-        if not character:
-            raise HTTPException(404, "Character not found")
-
-        db.delete(character)
-        db.commit()
-
-        return {"message": "Character deleted"}
+        return delete_with_idempotency(
+            db,
+            key=key,
+            endpoint=f"DELETE:/api/characters/{character_id}",
+            model_cls=Character,
+            resource_id=character_id,
+            not_found="Character not found",
+            message="Character deleted",
+        )
 
 
 # --------------------------------------------------
@@ -605,6 +808,8 @@ def delete_character(character_id: int):
 
 @app.post("/api/ai/grammar")
 def grammar_assistant(data: AIInput):
+    with SessionLocal() as db:
+        get_novel(db, data.novel_id)
 
     instructions = """
 You are the grammar and writing assistant of Light Novel Buddy.
