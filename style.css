@@ -560,7 +560,6 @@ label {
 /* AI results */
 
 .result {
-    white-space: pre-wrap;
     line-height: 1.8;
     background: #F2F0E9;
     border: 1px solid var(--border);
@@ -569,6 +568,115 @@ label {
     margin-top: 17px;
     font: 14px/1.8 Arial;
     color: #495849;
+}
+
+.result-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.result-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+
+/* Word-count goal */
+
+.goal-card {
+    margin-bottom: 22px;
+}
+
+.goal-row {
+    align-items: flex-start;
+}
+
+.goal-copy {
+    flex: 2 1 240px;
+}
+
+.goal-copy h2 {
+    margin-bottom: 7px;
+}
+
+.goal-copy p {
+    margin: 0;
+}
+
+.goal-controls {
+    flex: 1 1 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.goal-controls label {
+    margin-bottom: -4px;
+}
+
+.goal-controls input {
+    margin: 0;
+}
+
+.goal-controls .ghost {
+    width: 100%;
+}
+
+.goal-bar {
+    position: relative;
+    height: 12px;
+    margin-top: 18px;
+    background: var(--soft-sage);
+    border-radius: 20px;
+    overflow: hidden;
+}
+
+.goal-bar-fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--green);
+    border-radius: 20px;
+    transition: width .35s ease;
+}
+
+.goal-bar-fill.complete {
+    background: var(--gold);
+}
+
+.goal-label {
+    margin: 9px 0 0;
+}
+
+/* Section head actions and shortcuts */
+
+.head-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.shortcut-hint {
+    font: 12px/1.7 Arial;
+    color: var(--muted);
+    background: #F3EEE5;
+    border: 1px dashed #D8CCBB;
+    border-radius: 9px;
+    padding: 10px 12px;
+    margin: 0 0 6px;
+}
+
+kbd {
+    font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #FFFEFA;
+    border: 1px solid #D8CCBB;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 5px;
+    color: var(--dark);
 }
 
 /* Footer */
