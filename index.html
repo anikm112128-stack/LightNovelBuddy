@@ -10,6 +10,39 @@
 
 <body>
 
+    <!-- Authentication screen -->
+    <section id="authScreen" class="auth-screen" hidden>
+        <form id="loginForm" class="auth-card">
+            <p class="eyebrow">LIGHT NOVEL BUDDY</p>
+            <h1>Welcome back.</h1>
+
+            <label for="authEmail">Email</label>
+            <input
+                id="authEmail"
+                type="email"
+                autocomplete="email"
+                required
+            >
+
+            <label for="authPassword">Password</label>
+            <input
+                id="authPassword"
+                type="password"
+                autocomplete="current-password"
+                required
+                minlength="10"
+            >
+
+            <button class="action" type="submit">Sign in</button>
+
+            <p id="authMessage" role="status"></p>
+
+            <button class="ghost" id="showRegister" type="button">
+                Create an account
+            </button>
+        </form>
+    </section>
+
     <div class="app">
 
         <aside class="sidebar">
@@ -85,6 +118,20 @@
                     <h1 id="pageTitle" tabindex="-1">
                         Welcome, Author.
                     </h1>
+                </div>
+
+                <div class="account-controls">
+                    <select id="novelPicker" aria-label="Select novel">
+                        <option value="">Select a novel</option>
+                    </select>
+
+                    <button class="ghost" id="newNovelButton" type="button">
+                        New novel
+                    </button>
+
+                    <button class="ghost" id="logoutButton" type="button">
+                        Sign out
+                    </button>
                 </div>
 
                 <span class="tag">
@@ -589,7 +636,8 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
 
-    <script src="script.js" defer></script>
+   <script src="script.js" defer></script>
+    <script src="auth.js" defer></script>
 
 </body>
 </html>
