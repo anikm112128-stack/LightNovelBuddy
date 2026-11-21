@@ -10,6 +10,7 @@
 
 <body>
 
+    <div class="app" id="appRoot">
     <!-- Authentication screen -->
     <section id="authScreen" class="auth-screen" hidden>
         <form id="loginForm" class="auth-card">
@@ -94,7 +95,7 @@
                 </button>
 
                 <div class="sidebar-bottom">
-                    <div id="backendStatus">
+                    <div id="backendStatus" role="status" aria-live="polite">
                         Checking connection...
                     </div>
 
@@ -263,7 +264,7 @@
                         style="min-height:380px"
                     ></textarea>
 
-                    <div class="editor-status" id="editStatus"></div>
+                    <div class="editor-status" id="editStatus" role="status" aria-live="polite"></div>
 
                     <div class="row">
 
@@ -423,11 +424,11 @@
                         placeholder="Describe the character, their current situation or their arc..."
                     ></textarea>
 
-                    <button class="action" onclick="runCharacterAnalysis()">
+                    <button class="action" id="runCharacterButton" onclick="runCharacterAnalysis()">
                         Analyse character
                     </button>
 
-                    <div id="characterResult"></div>
+                    <div id="characterResult" aria-live="polite"></div>
 
                 </div>
 
@@ -472,11 +473,11 @@
                         <option value="simple">Simple and clear</option>
                     </select>
 
-                    <button class="action" onclick="runAI('grammar')">
+                    <button class="action" id="runGrammarButton" onclick="runAI('grammar')">
                         Review my writing
                     </button>
 
-                    <div id="grammarResult"></div>
+                    <div id="grammarResult" aria-live="polite"></div>
 
                 </div>
 
@@ -503,11 +504,11 @@
                         placeholder="Paste the chapter or scene you want to check..."
                     ></textarea>
 
-                    <button class="action" onclick="runAI('consistency')">
+                    <button class="action" id="runConsistencyButton" onclick="runAI('consistency')">
                         Check consistency
                     </button>
 
-                    <div id="consistencyResult"></div>
+                    <div id="consistencyResult" aria-live="polite"></div>
 
                 </div>
 
@@ -543,11 +544,11 @@
                         <option value="Concise">Concise</option>
                     </select>
 
-                    <button class="action" onclick="runAI('enrich')">
+                    <button class="action" id="runDescriptionButton" onclick="runAI('enrich')">
                         Enrich description
                     </button>
 
-                    <div id="descriptionResult"></div>
+                    <div id="descriptionResult" aria-live="polite"></div>
 
                 </div>
 
@@ -582,11 +583,11 @@
                         placeholder="A twist or direction you have in mind..."
                     >
 
-                    <button class="action" onclick="runAI('story')">
+                    <button class="action" id="runStoryButton" onclick="runAI('story')">
                         Explore story possibilities
                     </button>
 
-                    <div id="storyResult"></div>
+                    <div id="storyResult" aria-live="polite"></div>
 
                 </div>
 
@@ -628,6 +629,9 @@
             <div
                 class="chapter-modal-content"
                 id="chapterModalContent"
+                tabindex="0"
+                role="region"
+                aria-labelledby="chapterModalTitle"
             ></div>
 
         </div>

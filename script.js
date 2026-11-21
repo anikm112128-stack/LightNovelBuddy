@@ -6,29 +6,88 @@ let editingChapterId = null;
 
 // API REQUEST HANDLER
 
-async function request(path, method = "GET", data = null) {
-    const options = {
-        method,
-        headers: { "Content-Type": "application/json" }
-    };
+function createRequestKey() {
+    return (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
 
-    if (data) {
-        options.body = JSON.stringify(data);
+function formatErrorDetail(result, status) {
+    if (typeof result?.detail === "string" && result.detail.trim()) return result.detail.trim();
+    if (Array.isArray(result?.detail) && result.detail.length) {
+        return result.detail.map(item => {
+            const msg = String(item?.msg || "Invalid input").replace(/^Value error,\s*/i, "").trim();
+            const loc = Array.isArray(item?.loc) ? item.loc.filter(p => !["body", "path", "header"].includes(p)).join(".") : "";
+            return loc && !msg.toLowerCase().includes(loc.replace(/_/g, " ").toLowerCase()) ? `${loc}: ${msg}` : msg;
+        }).join("; ");
     }
+    if (status >= 502 && status <= 504) return `Server is temporarily unavailable (${status}). Please try again.`;
+    return "Server returned " + status;
+}
 
-    const response = await fetch(API + path, options);
+async function request(path, method = "GET", data = null, { idempotencyKey = null } = {}) {
+    const headers = { "Content-Type": "application/json" };
+    if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
-    let result = {};
+    const timeoutMs = path.startsWith("/api/ai/") ? 60000 : 15000;
+    const canRetry = method === "GET" || method === "PUT" || method === "DELETE" || Boolean(idempotencyKey);
+    const maxAttempts = canRetry ? 2 : 1;
 
-    try {
-        result = await response.json();
-    } catch (e) {}
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const controller = new AbortController();
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+        try {
+            const response = await fetch(API + path, {
+                method,
+                headers,
+                body: data ? JSON.stringify(data) : undefined,
+                signal: controller.signal
+            });
+            clearTimeout(timer);
 
-    if (!response.ok) {
-        throw new Error(result.detail || "Server returned " + response.status);
+            let result = {};
+            try { result = await response.json(); } catch (e) {}
+
+            if (!response.ok) {
+                const err = new Error(formatErrorDetail(result, response.status));
+                err.status = response.status;
+                throw err;
+            }
+            if ($("backendStatus")) $("backendStatus").textContent = "● Backend connected";
+            return result;
+        } catch (err) {
+            clearTimeout(timer);
+            if (err && err.status) throw err;
+            if (timedOut) throw new Error("Request timed out. Please check your connection and try again.");
+            const offline = navigator.onLine === false;
+            if (!offline && attempt < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+                continue;
+            }
+            if ($("backendStatus")) $("backendStatus").textContent = offline ? "○ Offline" : "○ Backend unavailable";
+            throw new Error(offline
+                ? "You appear to be offline. Check your connection and try again."
+                : "Network error — could not reach the server. Please try again.");
+        }
     }
+}
 
-    return result;
+function renderListError(containerId, label, error, onRetry) {
+    const el = $(containerId);
+    el.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "error-state";
+    box.setAttribute("role", "alert");
+    const text = document.createElement("p");
+    text.textContent = `${label}: ${error.message}`;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ghost";
+    btn.textContent = "Try again";
+    btn.addEventListener("click", onRetry);
+    box.append(text, btn);
+    el.appendChild(box);
 }
 
 // NOTIFICATIONS AND UTILITIES
@@ -109,6 +168,7 @@ document.querySelectorAll(".nav").forEach(b => {
 
 const CHAPTER_DRAFT_KEY = "lightNovelBuddy.chapterDraft.v1";
 let chapterBaseline = { title: "", content: "" };
+let chapterCreateKey = null;
 let chapterSaving = false;
 let chapterLoading = false;
 let storageWarningShown = false;
@@ -131,18 +191,21 @@ function warnBeforeUnload(event) {
 function updateChapterDraft() {
     const values = chapterValues();
     $("wordCounter").textContent = values.content.trim().split(/\s+/).filter(Boolean).length + " words";
+    const dirty = chapterIsDirty();
+    if (dirty && editingChapterId === null && !chapterCreateKey) chapterCreateKey = createRequestKey();
+    if (!dirty && editingChapterId === null) chapterCreateKey = null;
     window.removeEventListener("beforeunload", warnBeforeUnload);
-    if (chapterIsDirty()) window.addEventListener("beforeunload", warnBeforeUnload);
+    if (dirty) window.addEventListener("beforeunload", warnBeforeUnload);
     try {
-        if (chapterIsDirty()) {
+        if (dirty) {
             localStorage.setItem(CHAPTER_DRAFT_KEY, JSON.stringify({
-                chapterId: editingChapterId, baseline: chapterBaseline, ...values
+                chapterId: editingChapterId, baseline: chapterBaseline, createKey: chapterCreateKey, ...values
             }));
         } else {
             localStorage.removeItem(CHAPTER_DRAFT_KEY);
         }
     } catch (error) {
-        if (!storageWarningShown && chapterIsDirty()) {
+        if (!storageWarningShown && dirty) {
             storageWarningShown = true;
             toast("Local draft storage is unavailable. Save your work before leaving.");
         }
@@ -165,9 +228,17 @@ function restoreChapterDraft() {
         const draft = JSON.parse(raw);
         if (typeof draft.title !== "string" || typeof draft.content !== "string" ||
             !draft.baseline || typeof draft.baseline.title !== "string" || typeof draft.baseline.content !== "string" ||
-            !(draft.chapterId === null || Number.isInteger(draft.chapterId))) return;
+            !(draft.chapterId === null || (Number.isInteger(draft.chapterId) && draft.chapterId > 0))) {
+            localStorage.removeItem(CHAPTER_DRAFT_KEY);
+            return;
+        }
+        if (draft.title === draft.baseline.title && draft.content === draft.baseline.content) {
+            localStorage.removeItem(CHAPTER_DRAFT_KEY);
+            return;
+        }
         editingChapterId = draft.chapterId;
         chapterBaseline = draft.baseline;
+        chapterCreateKey = draft.chapterId === null && typeof draft.createKey === "string" ? draft.createKey : null;
         $("chapterTitle").value = draft.title;
         $("chapterText").value = draft.content;
         updateChapterEditControls(true);
@@ -220,13 +291,23 @@ async function saveChapter() {
         toast("Please enter a chapter title.");
         return;
     }
+    if (title.length > 300) {
+        toast("Chapter title must be 300 characters or fewer.");
+        return;
+    }
 
     chapterSaving = true;
     $("saveChapterButton").disabled = true;
+    const wasEditing = editingChapterId !== null;
+    if (!wasEditing && !chapterCreateKey) chapterCreateKey = createRequestKey();
     try {
-        const wasEditing = editingChapterId !== null;
-        const result = await request(wasEditing ? "/api/chapters/" + editingChapterId : "/api/chapters",
-            wasEditing ? "PUT" : "POST", { title, content: snapshot.content });
+        const result = await request(
+            wasEditing ? "/api/chapters/" + editingChapterId : "/api/chapters",
+            wasEditing ? "PUT" : "POST",
+            { title, content: snapshot.content },
+            wasEditing ? {} : { idempotencyKey: chapterCreateKey }
+        );
+        chapterCreateKey = null;
         toast(wasEditing ? "Chapter updated successfully." : "Chapter saved successfully.");
 
         const current = chapterValues();
@@ -243,8 +324,19 @@ async function saveChapter() {
         loadChapters();
         loadDashboard();
     } catch (e) {
-        updateChapterDraft();
-        toast("Could not save chapter: " + e.message);
+        if (wasEditing && e.status === 404) {
+            editingChapterId = null;
+            chapterBaseline = { title: "", content: "" };
+            chapterCreateKey = createRequestKey();
+            updateChapterEditControls();
+            updateChapterDraft();
+            loadChapters();
+            loadDashboard();
+            toast("Could not save chapter: Chapter no longer exists on server. Save again to create a new chapter.");
+        } else {
+            updateChapterDraft();
+            toast("Could not save chapter: " + e.message);
+        }
     } finally {
         chapterSaving = false;
         $("saveChapterButton").disabled = false;
@@ -254,6 +346,7 @@ async function saveChapter() {
 function resetChapterEditor() {
     editingChapterId = null;
     chapterBaseline = { title: "", content: "" };
+    chapterCreateKey = null;
     $("chapterTitle").value = "";
     $("chapterText").value = "";
     updateChapterEditControls();
@@ -282,6 +375,7 @@ async function editChapter(id) {
         const c = await request("/api/chapters/" + id);
         editingChapterId = c.id;
         chapterBaseline = { title: c.title || "", content: c.content || "" };
+        chapterCreateKey = null;
         $("chapterTitle").value = chapterBaseline.title;
         $("chapterText").value = chapterBaseline.content;
         updateChapterEditControls();
@@ -289,6 +383,7 @@ async function editChapter(id) {
         navigate("editor");
         window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
+        if (e.status === 404) { loadChapters(); loadDashboard(); }
         toast("Could not open chapter: " + e.message);
     } finally {
         chapterLoading = false;
@@ -313,6 +408,7 @@ async function viewChapter(id) {
             c.content || "(This chapter is empty.)";
 
         chapterModalPreviousFocus = document.activeElement;
+        if ($("appRoot")) $("appRoot").inert = true;
         $("chapterModal").classList.add("open");
         $("closeChapterModal").focus();
 
@@ -323,14 +419,26 @@ async function viewChapter(id) {
 
 function closeChapterView() {
     $("chapterModal").classList.remove("open");
+    if ($("appRoot")) $("appRoot").inert = false;
     if (chapterModalPreviousFocus && chapterModalPreviousFocus.isConnected) chapterModalPreviousFocus.focus();
     chapterModalPreviousFocus = null;
 }
 document.addEventListener("keydown", event => {
-    if (!$("chapterModal").classList.contains("open")) return;
-    if (event.key === "Escape") { event.preventDefault(); closeChapterView(); }
-    // The close button is the only interactive control in this dialog.
-    if (event.key === "Tab") { event.preventDefault(); $("closeChapterModal").focus(); }
+    if ($("chapterModal").classList.contains("open")) {
+        if (event.key === "Escape") { event.preventDefault(); closeChapterView(); return; }
+        if (event.key === "Tab") {
+            const focusable = [$("closeChapterModal"), $("chapterModalContent")].filter(Boolean);
+            const idx = focusable.indexOf(document.activeElement);
+            event.preventDefault();
+            focusable[(idx + (event.shiftKey ? focusable.length - 1 : 1)) % focusable.length].focus();
+        }
+        return;
+    }
+    if (event.key === "Escape" && $("mobileMenuToggle").getAttribute("aria-expanded") === "true") {
+        event.preventDefault();
+        setMobileMenu(false);
+        $("mobileMenuToggle").focus();
+    }
 });
 
 // CHAPTER LIST
@@ -343,7 +451,7 @@ async function loadChapters() {
             ? items.map(c => `
                 <div class="item">
 
-                    <strong>${escapeHTML(c.title)}</strong>
+                    <strong id="chapter-title-${Number(c.id)}">${escapeHTML(c.title)}</strong>
 
                     <p>
                         ${escapeHTML((c.content || "").slice(0, 220))}
@@ -358,18 +466,21 @@ async function loadChapters() {
 
                         <button
                             class="view-btn"
+                            aria-describedby="chapter-title-${Number(c.id)}"
                             onclick="viewChapter(${Number(c.id)})">
                             View
                         </button>
 
                         <button
                             class="edit-btn"
+                            aria-describedby="chapter-title-${Number(c.id)}"
                             onclick="editChapter(${Number(c.id)})">
                             Edit
                         </button>
 
                         <button
                             class="danger"
+                            aria-describedby="chapter-title-${Number(c.id)}"
                             onclick="deleteChapter(${Number(c.id)})">
                             Delete
                         </button>
@@ -380,7 +491,7 @@ async function loadChapters() {
             : '<div class="empty">No saved chapters yet.</div>';
 
     } catch (e) {
-        $("chapterList").textContent = e.message;
+        renderListError("chapterList", "Could not load chapters", e, loadChapters);
     }
 }
 
@@ -392,7 +503,7 @@ async function deleteChapter(id) {
     if (!confirm("Delete this chapter?")) return;
 
     try {
-        await request("/api/chapters/" + id, "DELETE");
+        await request("/api/chapters/" + id, "DELETE", null, { idempotencyKey: createRequestKey() });
 
         toast("Chapter deleted.");
 
@@ -400,7 +511,7 @@ async function deleteChapter(id) {
         loadDashboard();
 
     } catch (e) {
-        toast(e.message);
+        toast("Could not delete chapter: " + e.message);
     }
 }
 
@@ -410,6 +521,7 @@ let memories = [];
 let editingMemoryId = null;
 let memorySaving = false;
 let memoryBaseline = null;
+let memoryCreateKey = null;
 
 function memoryValues() {
     return { name: $("memoryName").value, category: $("memoryCategory").value, description: $("memoryDescription").value };
@@ -422,6 +534,7 @@ function memoryHasChanges() {
 function resetMemoryEditor() {
     editingMemoryId = null;
     memoryBaseline = null;
+    memoryCreateKey = null;
     $("memoryName").value = "";
     $("memoryCategory").querySelectorAll("option[data-custom-category]").forEach(option => option.remove());
     $("memoryCategory").selectedIndex = 0;
@@ -435,6 +548,7 @@ function editMemory(id) {
     if (!item) return;
     if (memoryHasChanges() && !confirm("Replace the unsaved world entry in the form?")) return;
     editingMemoryId = id;
+    memoryCreateKey = null;
     memoryBaseline = { name: item.name || "", category: item.category || "General", description: item.description || "" };
     $("memoryName").value = memoryBaseline.name;
     const category = $("memoryCategory");
@@ -460,18 +574,35 @@ async function addMemory() {
     if (memorySaving) return;
     const values = memoryValues();
     values.name = values.name.trim();
+    values.category = values.category.trim();
     if (!values.name) { toast("Please enter a name."); return; }
+    if (!values.category) { toast("Please select a category."); return; }
     memorySaving = true;
+    const wasEditing = editingMemoryId !== null;
+    if (!wasEditing && !memoryCreateKey) memoryCreateKey = createRequestKey();
     const controls = ["memoryName", "memoryCategory", "memoryDescription", "saveMemoryButton", "cancelMemoryButton"];
     controls.forEach(id => $(id).disabled = true);
     try {
-        const wasEditing = editingMemoryId !== null;
-        await request(wasEditing ? "/api/memories/" + editingMemoryId : "/api/memories", wasEditing ? "PUT" : "POST", values);
+        await request(
+            wasEditing ? "/api/memories/" + editingMemoryId : "/api/memories",
+            wasEditing ? "PUT" : "POST",
+            values,
+            wasEditing ? {} : { idempotencyKey: memoryCreateKey }
+        );
         resetMemoryEditor();
         toast(wasEditing ? "World entry updated." : "World memory saved.");
         loadMemories();
         loadDashboard();
     } catch (e) {
+        if (wasEditing && e.status === 404) {
+            editingMemoryId = null;
+            memoryBaseline = null;
+            memoryCreateKey = createRequestKey();
+            $("saveMemoryButton").textContent = "Save to world memory";
+            $("cancelMemoryButton").hidden = true;
+            loadMemories();
+            loadDashboard();
+        }
         toast("Could not save: " + e.message);
     } finally {
         memorySaving = false;
@@ -487,21 +618,23 @@ async function loadMemories() {
                     <span class="tag">${escapeHTML(m.category)}</span>
                     <strong>${escapeHTML(m.name)}</strong>
                     <p>${escapeHTML(m.description)}</p>
-                    <button class="edit-btn" onclick="editMemory(${Number(m.id)})" aria-label="Edit ${escapeHTML(m.name)}">Edit</button>
-                    <button class="danger" onclick="deleteMemory(${Number(m.id)})" aria-label="Delete ${escapeHTML(m.name)}">Delete</button>
+                    <div class="chapter-actions">
+                        <button class="edit-btn" onclick="editMemory(${Number(m.id)})" aria-label="Edit ${escapeHTML(m.name)}">Edit</button>
+                        <button class="danger" onclick="deleteMemory(${Number(m.id)})" aria-label="Delete ${escapeHTML(m.name)}">Delete</button>
+                    </div>
                 </div>
             `).join("")
             : '<div class="empty">Your world is waiting to be documented.</div>';
-    } catch (e) { $("memoryList").textContent = e.message; }
+    } catch (e) { renderListError("memoryList", "Could not load world memory", e, loadMemories); }
 }
 async function deleteMemory(id) {
     if (editingMemoryId === id) { toast("Finish or cancel editing this entry before deleting it."); return; }
     if (!confirm("Delete this world entry?")) return;
     try {
-        await request("/api/memories/" + id, "DELETE");
+        await request("/api/memories/" + id, "DELETE", null, { idempotencyKey: createRequestKey() });
         toast("Entry deleted.");
         loadMemories(); loadDashboard();
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast("Could not delete entry: " + e.message); }
 }
 
 // CHARACTER MANAGEMENT
@@ -510,6 +643,7 @@ let characters = [];
 let editingCharacterId = null;
 let characterSaving = false;
 let characterBaseline = null;
+let characterCreateKey = null;
 
 function characterValues() {
     return { name: $("charName").value, personality: $("charPersonality").value, description: $("charDescription").value };
@@ -522,6 +656,7 @@ function characterHasChanges() {
 function resetCharacterEditor() {
     editingCharacterId = null;
     characterBaseline = null;
+    characterCreateKey = null;
     $("charName").value = "";
     $("charPersonality").value = "";
     $("charDescription").value = "";
@@ -534,6 +669,7 @@ function editCharacter(id) {
     if (!item) return;
     if (characterHasChanges() && !confirm("Replace the unsaved character in the form?")) return;
     editingCharacterId = id;
+    characterCreateKey = null;
     characterBaseline = { name: item.name || "", personality: item.personality || "", description: item.description || "" };
     $("charName").value = characterBaseline.name;
     $("charPersonality").value = characterBaseline.personality;
@@ -552,18 +688,34 @@ async function addCharacter() {
     if (characterSaving) return;
     const values = characterValues();
     values.name = values.name.trim();
+    values.personality = values.personality.trim();
     if (!values.name) { toast("Please enter a character name."); return; }
     characterSaving = true;
+    const wasEditing = editingCharacterId !== null;
+    if (!wasEditing && !characterCreateKey) characterCreateKey = createRequestKey();
     const controls = ["charName", "charPersonality", "charDescription", "saveCharacterButton", "cancelCharacterButton"];
     controls.forEach(id => $(id).disabled = true);
     try {
-        const wasEditing = editingCharacterId !== null;
-        await request(wasEditing ? "/api/characters/" + editingCharacterId : "/api/characters", wasEditing ? "PUT" : "POST", values);
+        await request(
+            wasEditing ? "/api/characters/" + editingCharacterId : "/api/characters",
+            wasEditing ? "PUT" : "POST",
+            values,
+            wasEditing ? {} : { idempotencyKey: characterCreateKey }
+        );
         resetCharacterEditor();
         toast(wasEditing ? "Character updated." : "Character added.");
         loadCharacters();
         loadDashboard();
     } catch (e) {
+        if (wasEditing && e.status === 404) {
+            editingCharacterId = null;
+            characterBaseline = null;
+            characterCreateKey = createRequestKey();
+            $("saveCharacterButton").textContent = "Add character";
+            $("cancelCharacterButton").hidden = true;
+            loadCharacters();
+            loadDashboard();
+        }
         toast("Could not save character: " + e.message);
     } finally {
         characterSaving = false;
@@ -579,21 +731,23 @@ async function loadCharacters() {
                     <strong>${escapeHTML(c.name)}</strong>
                     <span class="tag">${escapeHTML(c.personality || "Character")}</span>
                     <p>${escapeHTML(c.description)}</p>
-                    <button class="edit-btn" onclick="editCharacter(${Number(c.id)})" aria-label="Edit ${escapeHTML(c.name)}">Edit</button>
-                    <button class="danger" onclick="deleteCharacter(${Number(c.id)})" aria-label="Delete ${escapeHTML(c.name)}">Delete</button>
+                    <div class="chapter-actions">
+                        <button class="edit-btn" onclick="editCharacter(${Number(c.id)})" aria-label="Edit ${escapeHTML(c.name)}">Edit</button>
+                        <button class="danger" onclick="deleteCharacter(${Number(c.id)})" aria-label="Delete ${escapeHTML(c.name)}">Delete</button>
+                    </div>
                 </div>
             `).join("")
             : '<div class="empty">Your characters will appear here.</div>';
-    } catch (e) { $("characterList").textContent = e.message; }
+    } catch (e) { renderListError("characterList", "Could not load characters", e, loadCharacters); }
 }
 async function deleteCharacter(id) {
     if (editingCharacterId === id) { toast("Finish or cancel editing this character before deleting it."); return; }
     if (!confirm("Delete this character?")) return;
     try {
-        await request("/api/characters/" + id, "DELETE");
+        await request("/api/characters/" + id, "DELETE", null, { idempotencyKey: createRequestKey() });
         toast("Character deleted.");
         loadCharacters(); loadDashboard();
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast("Could not delete character: " + e.message); }
 }
 
 // AI WRITING TOOLS
@@ -605,6 +759,7 @@ async function runAI(feature) {
         grammar: {
             input: "grammarText",
             result: "grammarResult",
+            button: "runGrammarButton",
             extra: () => ({
                 style: $("grammarMode").value
             })
@@ -613,12 +768,14 @@ async function runAI(feature) {
         consistency: {
             input: "consistencyText",
             result: "consistencyResult",
+            button: "runConsistencyButton",
             extra: () => ({})
         },
 
         enrich: {
             input: "descriptionText",
             result: "descriptionResult",
+            button: "runDescriptionButton",
             extra: () => ({
                 style: $("descriptionStyle").value
             })
@@ -627,6 +784,7 @@ async function runAI(feature) {
         story: {
             input: "storySituation",
             result: "storyResult",
+            button: "runStoryButton",
             extra: () => ({
                 idea: $("ownIdea").value
             })
@@ -635,6 +793,9 @@ async function runAI(feature) {
     };
 
     const c = config[feature];
+    if (!c) return;
+    const btn = $(c.button);
+    if (btn && btn.disabled) return;
 
     const text = $(c.input).value.trim();
     const out = $(c.result);
@@ -644,6 +805,7 @@ async function runAI(feature) {
         return;
     }
 
+    if (btn) btn.disabled = true;
     out.innerHTML =
         '<div class="result">✦ Thinking about your story...</div>';
 
@@ -670,12 +832,16 @@ async function runAI(feature) {
             escapeHTML(e.message) +
             '</div>';
 
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
 // CHARACTER AI ANALYSIS
 
 async function runCharacterAnalysis() {
+    const btn = $("runCharacterButton");
+    if (btn && btn.disabled) return;
 
     const text = $("characterAnalysisText").value.trim();
 
@@ -684,6 +850,7 @@ async function runCharacterAnalysis() {
         return;
     }
 
+    if (btn) btn.disabled = true;
     $("characterResult").innerHTML =
         '<div class="result">Analysing character...</div>';
 
@@ -707,8 +874,17 @@ async function runCharacterAnalysis() {
             escapeHTML(e.message) +
             '</div>';
 
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
+
+window.addEventListener("offline", () => {
+    if ($("backendStatus")) $("backendStatus").textContent = "○ Offline";
+});
+window.addEventListener("online", () => {
+    initialise();
+});
 
 // APPLICATION STARTUP
 
