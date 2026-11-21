@@ -262,19 +262,45 @@ Visit `http://127.0.0.1:8000/api/health` for the health response or `http://127.
 
 ### 4. Point the local frontend at the local backend
 
-**Important:** `script.js` is currently hard-coded to the deployed Render API. Running the frontend unchanged can read or modify the deployed shared database. In your **local working copy only**, change its first line to:
+**Important:** with no override, the frontend talks to the deployed Render API, so running it unchanged can read or modify the deployed shared database. `config.js` resolves the API base at load time, so you never edit `script.js`.
 
-```javascript
-const API = "http://127.0.0.1:8000";
-```
+Highest priority wins:
 
-Then, in another terminal from the repository root, serve the frontend:
+1. `?api=` query parameter — `http://127.0.0.1:5500/?api=http://127.0.0.1:8000`
+2. `window.LNB_API` in a local `config.local.js` (git-ignored, optional):
+
+   ```javascript
+   window.LNB_API = "http://127.0.0.1:8000";
+   ```
+3. `localStorage.setItem("lnb_api_base", "http://127.0.0.1:8000")` — or, from the browser console:
+
+   ```javascript
+   LNB_CONFIG.setApiBase("http://127.0.0.1:8000"); // clear with LNB_CONFIG.setApiBase(null)
+   ```
+4. The deployed URL, used when nothing else is set.
+
+Invalid values (non-http/https, not a URL) are ignored, so a typo cannot brick the app. `LNB_CONFIG.isLocalOverride` reports whether an override is active.
+
+In another terminal from the repository root, serve the frontend:
 
 ```bash
 python -m http.server 5500 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:5500/`. This origin is included in the backend’s current CORS allowlist. Do not commit the local API URL unless intentionally changing the project configuration. The browser tests below mock the **original deployed API URL**, so restore that line before running them.
+Open `http://127.0.0.1:5500/?api=http://127.0.0.1:8000`. That origin is in the backend's default CORS allowlist. The browser tests mock the **deployed API URL**, which stays the default, so no file edit is needed before running them.
+
+### 5. Configuration reference
+
+| Variable | Where | Default | Purpose |
+| --- | --- | --- | --- |
+| `ADAPTION_API_KEY` | backend env | none | Required for live AI. Never commit a real key. |
+| `ADAPTION_MODEL` | backend env | `qwen3.5-397b` | Model used for AI requests. |
+| `DATABASE_URL` | backend env | `sqlite:///backend/database.db` | Any SQLAlchemy URL. `postgres://` is rewritten to `postgresql://`. Set `DATABASE_URL` only where the database is durable. |
+| `ALLOWED_ORIGINS` | backend env | local 5500 + deployed frontend | Comma-separated CORS allowlist; replaces the defaults. |
+| `JWT_SECRET_KEY` | backend env | random per process | Only used once authentication is wired in; a random fallback invalidates tokens on restart. |
+| `LNB_API` / `lnb_api_base` | frontend | deployed API | Local API override, see step 4. |
+
+**Deployment notes (Render):** set the variables above in the service's Environment tab, not in `backend/.env`. A free Render web service has an ephemeral filesystem, so the default SQLite file is recreated on every deploy or restart. Do not point `DATABASE_URL` at a database you are not ready to keep: tables are created at startup with `create_all`, and there are no migrations or backups yet.
 
 ## Testing
 
@@ -304,7 +330,7 @@ If Hackholics is selected for the offline hackathon, these are our proposed next
 - Add individual accept/reject controls for writing corrections and clearer references for consistency feedback.
 - Develop more interactive story brainstorming, including follow-up questions and ways to combine directions.
 - Improve draft recovery across tabs and, after sign-in is in place, explore safe cross-device draft sync.
-- Improve local API configuration so developers do not need to edit a hard-coded URL, and document deployment and environment setup more clearly.
+- ~~Improve local API configuration so developers do not need to edit a hard-coded URL, and document deployment and environment setup more clearly.~~ **Done in this branch:** `config.js` resolves the API base (query parameter, local override file, or browser storage), and the README documents environment variables and Render deployment. PostgreSQL support remains future work.
 
 ### Small bug fixes and hardening
 
