@@ -194,7 +194,7 @@ test('mobile menu is compact and closes after navigation', async ({ page }) => {
 
 test('automated accessibility checks on each section', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' }); await mockApi(page); await open(page);
-    for (const section of ['dashboard', 'editor', 'memory', 'characters', 'grammar', 'consistency', 'description', 'story']) {
+    for (const section of ['dashboard', 'editor', 'memory', 'characters', 'grammar', 'consistency', 'description', 'story', 'emotionRAG']) {
         await nav(page, section);
         const results = await new AxeBuilder({ page }).analyze();
         expect(results.violations, section).toEqual([]);

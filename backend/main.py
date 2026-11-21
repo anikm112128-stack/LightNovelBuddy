@@ -19,9 +19,19 @@ from adaption import Adaption
 try:  # imported as part of a package (uvicorn backend.main:app)
     from .auth import build_auth_models, make_auth_router, get_owned_novel
     from .novels import make_novel_router
+    from .emotion_rag import (
+        build_evidence_block, cited_passages, detect_ambivalence,
+        index_chapters, profile, retrieve, score_emotions, score_texture,
+        split_passages,
+    )
 except ImportError:  # run from inside backend/
     from auth import build_auth_models, make_auth_router, get_owned_novel
     from novels import make_novel_router
+    from emotion_rag import (
+        build_evidence_block, cited_passages, detect_ambivalence,
+        index_chapters, profile, retrieve, score_emotions, score_texture,
+        split_passages,
+    )
 
 
 # ==================================================
@@ -584,6 +594,31 @@ class NarrativeDNAInput(BaseModel):
     novel_id: Optional[int] = None
     scope: str = "excerpt"
     focus: str = "full"
+
+
+class EmotionRAGInput(BaseModel):
+    """A passage of new writing, to be read against the author's saved work."""
+
+    text: str
+    novel_id: Optional[int] = None
+    top_k: int = 4
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def check_text(cls, v): return _clean_text(v, "Text", required=True, max_len=20_000)
+
+    @field_validator("novel_id", mode="before")
+    @classmethod
+    def check_novel(cls, v): return _clean_novel_id(v)
+
+    @field_validator("top_k", mode="before")
+    @classmethod
+    def check_top_k(cls, v):
+        if v is None:
+            return 4
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("top_k must be an integer.")
+        return max(1, min(v, 8))
 
 # ==================================================
 # 9. OWNERSHIP HELPERS
@@ -1588,7 +1623,152 @@ TEXT TO ANALYZE:
     return {
         "result": ask_ai(instructions, prompt)
             }
-    
+
+
+# ==================================================
+# 16b. AI: EMOTIONAL RAG
+# ==================================================
+
+@app.post("/api/ai/emotion-rag")
+def emotion_rag(
+    data: EmotionRAGInput,
+    user=Depends(get_current_user)
+):
+    """Retrieval-augmented emotional reading.
+
+    The model never guesses the author's feelings from the passage alone. We
+    retrieve passages from their own saved chapters whose emotional register
+    matches the new writing, show the model how *they* handle that feeling, and
+    ask it to reason from that evidence. Every claim is expected to cite the
+    retrieved passage it came from.
+    """
+
+    with SessionLocal() as db:
+        novel = resolve_novel(db, user, data.novel_id)
+
+        chapters = db.query(Chapter).filter(
+            Chapter.novel_id == novel.id
+        ).order_by(Chapter.id.asc()).all()
+
+        corpus = [
+            chapter for chapter in chapters
+            if (chapter.content or "").strip()
+        ]
+
+        # Local measurement first: this is what the browser reports instantly,
+        # and it stands on its own even if the language model is unavailable.
+        query_ranked, _ = score_emotions(data.text)
+        query_texture = score_texture(data.text)
+
+        index = index_chapters(corpus)
+        passages = retrieve(data.text, index, top_k=data.top_k)
+
+        novel_profile = profile(corpus)
+
+        local = {
+            "registers": query_ranked[:5],
+            "texture": query_texture,
+            "ambivalence": detect_ambivalence(query_ranked),
+            "dominant": [item["register"] for item in query_ranked[:2]],
+            "measured_from": "lexicon + density, no model involved",
+        }
+
+        retrieval = {
+            "corpus_chapters": len(corpus),
+            "corpus_passages": len(index),
+            "query_passages": len(split_passages(data.text)),
+            "top_k": data.top_k,
+            "passages": [
+                {
+                    "tag": f"P{position}",
+                    "chapter_id": passage["chapter_id"],
+                    "chapter_title": passage["chapter_title"],
+                    "passage_no": passage["passage_no"],
+                    "emotions": passage["emotions"],
+                    "texture": passage["texture"],
+                    "scores": passage["scores"],
+                    "excerpt": passage["text"][:280],
+                }
+                for position, passage in enumerate(passages, start=1)
+            ],
+        }
+
+    if not index:
+        # Nothing to retrieve: report the local reading and say why.
+        return {
+            "result": None,
+            "local": local,
+            "retrieval": retrieval,
+            "profile": novel_profile,
+            "citations": [],
+            "note": (
+                "No saved chapters to retrieve from yet. The local emotional "
+                "reading above is measured directly from your passage. Save a "
+                "few chapters and this assistant will ground its answers in "
+                "your own writing."
+            ),
+        }
+
+    instructions = """
+You are the emotional reader of Light Novel Buddy.
+
+Your job is to understand how the author is feeling while writing, and to
+prove it from their own work rather than from guesswork.
+
+You are given a passage of new writing and a set of passages retrieved from
+the author's own saved chapters, each tagged P1, P2, P3 and so on. Each
+retrieved passage carries a measured emotional register.
+
+Reason only from the evidence you are given.
+
+Respond in these sections, using these headings:
+
+## What this passage is doing
+Describe the emotional register of the new writing: what feeling it carries,
+how strongly, and which words carry it.
+
+## How you have written this before
+For each relevant retrieved passage, explain what it shows about how this
+author handles this feeling. Cite the tag, for example [P2], and quote a short
+fragment. Only cite tags that appear in the context.
+
+## Where the feeling breaks
+Point out any registers pulling against each other. If the passage is
+ambivalent, say so plainly instead of picking a winner.
+
+## The honest limit
+State clearly that this is an inferred reading of the writing, not a
+measurement of the author's actual emotional state. One or two sentences.
+
+Never invent evidence. If the retrieved passages do not support a claim, say
+so and do not cite anything.
+"""
+
+    prompt = f"""
+PASSAGE OF NEW WRITING:
+{data.text}
+
+MEASURED REGISTER OF THE NEW WRITING:
+{', '.join(f"{item['register']} {item['score']:.2f}" for item in query_ranked) or "no clear register"}
+
+THIS AUTHOR'S OVERALL EMOTIONAL PROFILE:
+{', '.join(f"{item['register']} {item['score']:.2f}" for item in novel_profile["registers"][:5]) or "not established yet"}
+
+RETRIEVED PASSAGES FROM THIS AUTHOR'S SAVED CHAPTERS:
+{build_evidence_block(passages)}
+"""
+
+    result = ask_ai(instructions, prompt)
+
+    return {
+        "result": result,
+        "local": local,
+        "retrieval": retrieval,
+        "profile": novel_profile,
+        "citations": cited_passages(result, passages),
+    }
+
+
 # ==================================================
 # 17. AI: GRAMMAR ASSISTANT
 # ==================================================

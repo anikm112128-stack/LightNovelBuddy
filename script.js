@@ -372,6 +372,7 @@ function navigate(page) {
         story: "Story Development",
         chekhov: "Chekhov's Gun Tracker",
         narrativeDNA: "Narrative DNA",
+        emotionRAG: "Emotional Register",
         relationships: "Character Relationship Web"
     };
 
@@ -388,6 +389,13 @@ function navigate(page) {
     if (page === "chekhov") loadChekhov();
     if (page === "narrativeDNA") {
         $("dnaResult").innerHTML = "";
+    }
+    if (page === "emotionRAG") {
+        $("ragResult").hidden = true;
+        $("ragResult").textContent = "";
+        $("ragReading").innerHTML = "";
+        $("ragRetrieved").innerHTML = "";
+        $("ragMessage").textContent = "Measures feeling first, then grounds it in your own chapters.";
     }
     if (page === "relationships") loadRelationships();
 }
@@ -1507,6 +1515,146 @@ async function analyzeNarrativeDNA() {
         button.disabled = false;
     }
 }
+
+
+// EMOTIONAL REGISTER (RETRIEVAL-AUGMENTED)
+
+function renderEmotionMeters(registers) {
+    if (!registers || !registers.length) {
+        return '<p class="small">No clear emotional register was measured in this passage.</p>';
+    }
+
+    return `<div class="emotion-meters">${registers.map(item => `
+        <div class="emotion-meter">
+            <div class="emotion-meter-head">
+                <strong>${escapeHTML(item.register)}</strong>
+                <span class="small">${Math.round(item.score * 100)}%</span>
+            </div>
+            <div class="emotion-bar" role="img"
+                 aria-label="${escapeHTML(item.register)} ${Math.round(item.score * 100)} percent">
+                <span style="width:${Math.max(4, Math.round(item.score * 100))}%"></span>
+            </div>
+            ${item.evidence && item.evidence.length
+                ? `<p class="small emotion-evidence">from: ${item.evidence.map(escapeHTML).join(", ")}</p>`
+                : ""}
+        </div>
+    `).join("")}</div>`;
+}
+
+function renderEmotionReading(local) {
+    const texture = local.texture && Object.keys(local.texture).length
+        ? Object.entries(local.texture)
+            .sort((a, b) => b[1] - a[1])
+            .map(([name, value]) => `<span class="chip">${escapeHTML(name.replace(/_/g, " "))} ${value}%</span>`)
+            .join("")
+        : '<span class="small">No strong texture cues.</span>';
+
+    const ambivalence = local.ambivalence && local.ambivalence.length
+        ? `<p class="small"><strong>Held in the same breath:</strong> ${
+            local.ambivalence
+                .map(pair => `${escapeHTML(pair.between.join(" / "))} (${Math.round(pair.strength * 100)}%)`)
+                .join("; ")
+        }</p>`
+        : "";
+
+    return `
+        <div class="card-subsection">
+            <h3>Measured register</h3>
+            ${renderEmotionMeters(local.registers)}
+            ${ambivalence}
+            <p class="small">Texture: ${texture}</p>
+            <p class="small">${escapeHTML(local.measured_from)}.</p>
+        </div>
+    `;
+}
+
+function renderRetrieved(passages, citations) {
+    if (!passages || !passages.length) {
+        return `<div class="card-subsection">
+            <h3>Retrieved from your chapters</h3>
+            <p class="small">Nothing retrieved yet — save a few chapters and this assistant will ground its reading in your own writing.</p>
+        </div>`;
+    }
+
+    const citedTags = new Set((citations || []).map(c => c.tag));
+
+    return `<div class="card-subsection">
+        <h3>Retrieved from your chapters</h3>
+        <p class="small">
+            Ranked by how much they share your subject (lexical) and your feeling (emotional).
+        </p>
+        <div class="retrieved-list">${passages.map(p => `
+            <div class="retrieved-item${citedTags.has(p.tag) ? " cited" : ""}">
+                <div class="retrieved-head">
+                    <span class="retrieved-tag">${escapeHTML(p.tag)}</span>
+                    <strong>${escapeHTML(p.chapter_title)}</strong>
+                    <span class="small">passage ${p.passage_no}${citedTags.has(p.tag) ? " · cited" : ""}</span>
+                </div>
+                <p class="small">
+                    lexical ${Math.round(p.scores.lexical * 100)}% ·
+                    emotional ${Math.round(p.scores.emotional * 100)}% ·
+                    combined ${Math.round(p.scores.combined * 100)}%
+                </p>
+                <blockquote>${escapeHTML(p.excerpt)}${p.excerpt.length >= 280 ? "…" : ""}</blockquote>
+            </div>
+        `).join("")}</div>
+    </div>`;
+}
+
+async function analyzeEmotionRAG() {
+    const button = $("analyzeRagButton");
+    if (button.disabled) return;
+
+    const text = $("ragText").value.trim();
+
+    if (!text) {
+        toast("Please paste a passage to read.");
+        return;
+    }
+
+    button.disabled = true;
+    $("ragMessage").textContent = "Measuring the register, then retrieving from your chapters...";
+    $("ragReading").innerHTML = "";
+    $("ragRetrieved").innerHTML = "";
+    $("ragResult").hidden = true;
+
+    try {
+        const data = await request("/api/ai/emotion-rag", "POST", {
+            text,
+            top_k: Number($("ragTopK").value) || 4
+        });
+
+        // Older or mocked responses may omit the retrieval envelope. Degrade to
+        // the prose answer rather than throwing on a missing field.
+        const local = data.local || { registers: [], texture: {} };
+        const retrieval = data.retrieval || { passages: [], corpus_passages: 0, corpus_chapters: 0 };
+
+        // The local measurement is shown even when the model is unavailable.
+        $("ragReading").innerHTML = renderEmotionReading(local);
+        $("ragRetrieved").innerHTML = renderRetrieved(
+            retrieval.passages,
+            data.citations
+        );
+
+        if (data.result) {
+            $("ragResult").textContent = data.result;
+            $("ragResult").hidden = false;
+            $("ragMessage").textContent = retrieval.corpus_passages
+                ? `Read against ${retrieval.corpus_passages} passages from ` +
+                  `${retrieval.corpus_chapters} chapters.`
+                : "Reading complete.";
+        } else {
+            $("ragMessage").textContent = data.note || "Local reading complete.";
+        }
+
+    } catch (e) {
+        $("ragMessage").textContent = "Could not read this passage: " + e.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+$("analyzeRagButton").addEventListener("click", analyzeEmotionRAG);
 
 
 // CHARACTER RELATIONSHIP WEB

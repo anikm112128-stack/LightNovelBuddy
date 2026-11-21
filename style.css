@@ -1519,3 +1519,118 @@ footer {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* Emotional register (retrieval-augmented) */
+
+.card-subsection {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+}
+
+.card-subsection h3 {
+    margin: 0 0 14px;
+    font-family: Georgia, serif;
+    font-size: 17px;
+    font-weight: 400;
+}
+
+.emotion-meters {
+    display: grid;
+    gap: 13px;
+    margin-bottom: 14px;
+}
+
+.emotion-meter-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.emotion-meter-head strong {
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: capitalize;
+}
+
+.emotion-bar {
+    height: 7px;
+    border-radius: 999px;
+    background: var(--green-light);
+    overflow: hidden;
+}
+
+.emotion-bar span {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--green), var(--lavender));
+    transition: width 320ms ease;
+}
+
+.emotion-evidence {
+    margin: 5px 0 0;
+    font-style: italic;
+}
+
+.chip {
+    display: inline-block;
+    margin: 0 6px 6px 0;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--green-light);
+    color: var(--green-dark);
+    font-size: 11.5px;
+    text-transform: capitalize;
+}
+
+.retrieved-list {
+    display: grid;
+    gap: 13px;
+}
+
+.retrieved-item {
+    padding: 15px 17px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--green-light);
+    border-radius: 10px;
+    background: var(--surface-soft);
+}
+
+.retrieved-item.cited {
+    border-left-color: var(--green);
+    background: #fff;
+}
+
+.retrieved-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 9px;
+    margin-bottom: 6px;
+}
+
+.retrieved-head strong {
+    font-size: 14px;
+}
+
+.retrieved-tag {
+    padding: 1px 7px;
+    border-radius: 5px;
+    background: var(--green);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.retrieved-item blockquote {
+    margin: 9px 0 0;
+    padding-left: 13px;
+    border-left: 2px solid var(--border);
+    color: #4a5a4d;
+    font-family: Georgia, serif;
+    font-size: 13.5px;
+    line-height: 1.7;
+}
