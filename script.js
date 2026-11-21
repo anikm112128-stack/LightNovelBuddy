@@ -8,7 +8,7 @@ const AUTH_TOKEN_KEY = "lnb_access_token";
 const SELECTED_NOVEL_KEY = "lnb_selected_novel";
 
 function getAccessToken() {
-    return sessionStorage.getItem(AUTH_TOKEN_KEY);
+    return localStorage.getItem(AUTH_TOKEN_KEY);
 }
 
 function getSelectedNovelId() {
@@ -141,7 +141,7 @@ async function request(path, method = "GET", data = null, { idempotencyKey = nul
                 err.status = response.status;
 
                 if (response.status === 401 && token) {
-                    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+                    localStorage.removeItem(AUTH_TOKEN_KEY);
                 }
 
                 throw err;
@@ -253,32 +253,34 @@ function navigate(page) {
     });
 
     const titles = {
-    dashboard: "Welcome, Author.",
-    editor: "Chapter Editor",
-    memory: "World Building Memory",
-    characters: "Character Library",
-    grammar: "Grammar Assistant",
-    consistency: "Consistency Checker",
-    description: "Description Assistant",
-    story: "Story Development",
-    chekhov: "Chekhov's Gun Tracker",
-    narrativeDNA: "Narrative DNA",
-    relationships: "Character Relationship Web"
-};
+        dashboard: "Welcome, Author.",
+        editor: "Chapter Editor",
+        memory: "World Building Memory",
+        characters: "Character Library",
+        grammar: "Grammar Assistant",
+        consistency: "Consistency Checker",
+        description: "Description Assistant",
+        story: "Story Development",
+        chekhov: "Chekhov's Gun Tracker",
+        narrativeDNA: "Narrative DNA",
+        relationships: "Character Relationship Web"
+    };
 
     $("pageTitle").textContent = titles[page] || "Light Novel Buddy";
     setMobileMenu(false);
-    if (menuWasOpen && window.matchMedia("(max-width: 760px)").matches) $("pageTitle").focus({ preventScroll: true });
+    if (menuWasOpen && window.matchMedia("(max-width: 760px)").matches) {
+        $("pageTitle").focus({ preventScroll: true });
+    }
 
     if (page === "dashboard") loadDashboard();
-if (page === "editor") loadChapters();
-if (page === "memory") loadMemories();
-if (page === "characters") loadCharacters();
-if (page === "chekhov") loadChekhov();
-if (page === "narrativeDNA") {
-    $("dnaResult").innerHTML = "";
-}
-if (page === "relationships") loadRelationships();
+    if (page === "editor") loadChapters();
+    if (page === "memory") loadMemories();
+    if (page === "characters") loadCharacters();
+    if (page === "chekhov") loadChekhov();
+    if (page === "narrativeDNA") {
+        $("dnaResult").innerHTML = "";
+    }
+    if (page === "relationships") loadRelationships();
 }
 
 document.querySelectorAll(".nav").forEach(b => {
@@ -615,7 +617,6 @@ async function loadChapters() {
         renderListError("chapterList", "Could not load chapters", e, loadChapters);
     }
 }
-
 
 // Delete a saved chapter
 
@@ -1234,4 +1235,3 @@ async function initialise() {
 }
 
 initialise();
-      
