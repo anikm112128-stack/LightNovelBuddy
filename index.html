@@ -325,6 +325,16 @@
                         style="min-height:380px"
                     ></textarea>
 
+                    <div class="draft-conflict" id="draftConflict" role="alert" hidden>
+                        <p data-conflict-text>Another tab has newer changes to this draft.</p>
+                        <button class="ghost" type="button" onclick="loadConflictingDraft()">
+                            Load other tab's draft
+                        </button>
+                        <button class="ghost" type="button" onclick="clearDraftConflict()">
+                            Keep mine
+                        </button>
+                    </div>
+
                     <div class="editor-status" id="editStatus" role="status" aria-live="polite"></div>
 
                     <div class="row">
@@ -661,6 +671,46 @@
                     </button>
 
                     <div id="storyResult" aria-live="polite"></div>
+
+                    <!-- Interactive follow-up: select directions, answer questions, refine -->
+                    <div class="brainstorm" id="brainstormPanel" hidden>
+
+                        <div class="section-head">
+                            <h3>Follow up on what interests you</h3>
+                        </div>
+
+                        <p class="small">
+                            Tick the directions you want to develop, add anything you have decided,
+                            then ask for a deeper set. Nothing here changes your story on its own.
+                        </p>
+
+                        <div id="storyQuestions"></div>
+
+                        <fieldset class="direction-picker" id="directionPicker">
+                            <legend class="small">Directions worth developing</legend>
+                            <div id="directionOptions" class="direction-options"></div>
+                        </fieldset>
+
+                        <label for="storyAnswers">Your answers or decisions (optional)</label>
+
+                        <textarea
+                            id="storyAnswers"
+                            placeholder="e.g. I want the betrayal to happen before the festival, and Ash should not know yet..."
+                        ></textarea>
+
+                        <div class="row">
+                            <button class="action" id="refineStoryButton" type="button" onclick="refineStory()">
+                                Develop selected directions
+                            </button>
+                            <button class="ghost" id="combineStoryButton" type="button" onclick="combineDirections()">
+                                Combine selected
+                            </button>
+                            <button class="ghost" id="resetStoryButton" type="button" onclick="resetBrainstorm()">
+                                Start over
+                            </button>
+                        </div>
+
+                    </div>
 
                 </div>
 

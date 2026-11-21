@@ -88,11 +88,19 @@ def test_no_citations_yields_empty_references_not_an_error(client, monkeypatch):
 
 
 def test_cross_endpoint_response_shape_unchanged(client, monkeypatch):
-    """Non-consistency assistants must not gain a references key."""
+    """Only the consistency and story endpoints may extend the original shape.
+
+    Grammar, description and character still return exactly {"result"}; story
+    gained "mode" when interactive brainstorming was added.
+    """
     monkeypatch.setattr(app_module, "ask_ai", lambda i, u, n=1: "text")
-    for route in ("grammar", "enrich", "story", "character"):
+    for route in ("grammar", "enrich", "character"):
         body = client.post(f"/api/ai/{route}", json={"text": "Prose."}).json()
         assert set(body.keys()) == {"result"}, f"{route} response shape changed"
+
+    story = client.post("/api/ai/story", json={"text": "Prose."}).json()
+    assert set(story.keys()) == {"result", "mode"}, "story shape changed unexpectedly"
+    assert story["mode"] == "explore"
 
 
 def test_chapter_tag_not_misread_as_character(client, monkeypatch):

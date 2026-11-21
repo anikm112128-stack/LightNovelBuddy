@@ -506,6 +506,29 @@ label {
     box-shadow: 0 0 0 3px rgba(165, 139, 112, .15);
 }
 
+.draft-conflict {
+    margin: 10px 0;
+    padding: 13px 15px;
+    border-radius: 9px;
+    background: #FBF3E4;
+    border: 1px solid #E2CFA6;
+    color: #6B5222;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.draft-conflict p {
+    margin: 0;
+    color: #6B5222;
+    font: 13px/1.6 Arial;
+}
+
+.draft-conflict .ghost {
+    align-self: flex-start;
+    background: #FFFEFA;
+}
+
 .editor-status {
     display: none;
     margin: 10px 0;
@@ -734,6 +757,91 @@ kbd {
     border-radius: 5px;
     padding: 1px 5px;
     color: var(--dark);
+}
+
+/* Interactive brainstorming */
+
+.brainstorm {
+    margin-top: 22px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+}
+
+.brainstorm h3 {
+    margin-bottom: 0;
+}
+
+.direction-picker {
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    padding: 12px 15px 15px;
+    margin: 14px 0 16px;
+    background: #F8F6F0;
+}
+
+.direction-picker legend {
+    padding: 0 6px;
+    font: 11px Arial;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.direction-options {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.direction-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    font: 13px/1.5 Arial;
+    color: var(--dark);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 10px 12px;
+    cursor: pointer;
+}
+
+.direction-option:hover {
+    border-color: var(--green);
+}
+
+.direction-option input {
+    width: auto;
+    margin: 2px 0 0;
+    flex-shrink: 0;
+    accent-color: var(--green);
+}
+
+.direction-title {
+    overflow-wrap: anywhere;
+}
+
+.question-list {
+    list-style: none;
+    margin: 0 0 14px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.question-list li {
+    font: 13px/1.6 Arial;
+    color: var(--dark);
+    background: var(--soft-sage);
+    border-radius: 9px;
+    padding: 9px 12px;
+}
+
+.question-list li::before {
+    content: "? ";
+    color: var(--green);
+    font-weight: bold;
 }
 
 /* Footer */
