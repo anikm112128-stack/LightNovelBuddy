@@ -3,32 +3,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.main as app_module
 
-
-@pytest.fixture()
-def client(monkeypatch):
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    app_module.Base.metadata.create_all(bind=engine)
-    with TestingSession() as db:
-        db.add(app_module.Novel(id=1, title="Test Novel"))
-        db.commit()
-
-    monkeypatch.setattr(app_module, "engine", engine)
-    monkeypatch.setattr(app_module, "SessionLocal", TestingSession)
-    return TestClient(app_module.app)
 
 
 def test_explore_mode_asks_for_questions(client, monkeypatch):
