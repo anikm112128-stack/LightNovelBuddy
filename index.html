@@ -41,9 +41,30 @@
 
     <!-- Authentication -->
     <section id="authScreen" class="auth-screen" hidden>
+        <!-- Desktop: an editorial panel beside the form. Collapses away on phones. -->
+        <aside class="auth-showcase" aria-hidden="true">
+            <p class="auth-showcase-brand">Light Novel <span>Buddy.</span></p>
+
+            <div class="auth-showcase-copy">
+                <p class="eyebrow">YOUR PERSONAL WRITING STUDIO</p>
+                <p class="auth-showcase-headline">Every chapter, every character, and every thread of your world — in one quiet place.</p>
+                <p class="auth-showcase-note">
+                    Draft with an assistant that remembers your lore,
+                    keeps your cast consistent, and never writes the story for you.
+                </p>
+            </div>
+
+            <ul class="auth-showcase-points">
+                <li>Chapters, world memories and characters that stay in sync</li>
+                <li>Consistency checks that cite the page they came from</li>
+                <li>Drafts recovered across tabs, or after a lost connection</li>
+            </ul>
+        </aside>
+
         <form id="loginForm" class="auth-card">
             <p class="eyebrow">LIGHT NOVEL BUDDY</p>
-            <h1>Welcome back.</h1>
+            <h1 id="authHeading">Welcome back.</h1>
+            <p class="auth-subtitle" id="authSubtitle">Sign in to pick up where your story left off.</p>
 
             <label for="authEmail">Email</label>
             <input
@@ -53,7 +74,7 @@
                 required
             >
 
-            <label for="authPassword">Password</label>
+            <label for="authPassword" id="authPasswordLabel">Password</label>
             <input
                 id="authPassword"
                 type="password"
