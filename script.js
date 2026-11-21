@@ -4,7 +4,17 @@ const $ = (id) => document.getElementById(id);
 
 let editingChapterId = null;
 
-// API REQUEST HANDLER
+const AUTH_TOKEN_KEY = "lnb_access_token";
+const SELECTED_NOVEL_KEY = "lnb_selected_novel";
+
+function getAccessToken() {
+    return sessionStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+function getSelectedNovelId() {
+    const id = Number(localStorage.getItem(SELECTED_NOVEL_KEY));
+    return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 function createRequestKey() {
     return (window.crypto && crypto.randomUUID)
@@ -13,62 +23,165 @@ function createRequestKey() {
 }
 
 function formatErrorDetail(result, status) {
-    if (typeof result?.detail === "string" && result.detail.trim()) return result.detail.trim();
+    if (typeof result?.detail === "string" && result.detail.trim()) {
+        return result.detail.trim();
+    }
+
     if (Array.isArray(result?.detail) && result.detail.length) {
         return result.detail.map(item => {
-            const msg = String(item?.msg || "Invalid input").replace(/^Value error,\s*/i, "").trim();
-            const loc = Array.isArray(item?.loc) ? item.loc.filter(p => !["body", "path", "header"].includes(p)).join(".") : "";
-            return loc && !msg.toLowerCase().includes(loc.replace(/_/g, " ").toLowerCase()) ? `${loc}: ${msg}` : msg;
+            const msg = String(item?.msg || "Invalid input")
+                .replace(/^Value error,\s*/i, "").trim();
+
+            const loc = Array.isArray(item?.loc)
+                ? item.loc.filter(p => !["body", "path", "header"].includes(p)).join(".")
+                : "";
+
+            return loc && !msg.toLowerCase().includes(loc.replace(/_/g, " ").toLowerCase())
+                ? `${loc}: ${msg}`
+                : msg;
         }).join("; ");
     }
-    if (status >= 502 && status <= 504) return `Server is temporarily unavailable (${status}). Please try again.`;
+
+    if (status >= 502 && status <= 504) {
+        return `Server is temporarily unavailable (${status}). Please try again.`;
+    }
+
     return "Server returned " + status;
 }
 
 async function request(path, method = "GET", data = null, { idempotencyKey = null } = {}) {
-    const headers = { "Content-Type": "application/json" };
-    if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+    const headers = {};
+    const token = getAccessToken();
+
+    const isPublicRoute =
+        path === "/" ||
+        path === "/api/health" ||
+        path === "/api/auth/login" ||
+        path === "/api/auth/register";
+
+    const isNovelManagementRoute = path.startsWith("/api/novels");
+
+    if (token && !isPublicRoute) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+
+    if (idempotencyKey) {
+        headers["Idempotency-Key"] = idempotencyKey;
+    }
+
+    let requestPath = path;
+    let requestData = data;
+
+    const novelId = getSelectedNovelId();
+
+    if (
+        !isPublicRoute &&
+        !isNovelManagementRoute &&
+        !path.startsWith("/api/auth/") &&
+        novelId
+    ) {
+        if (
+            method === "GET" &&
+            !/[?&]novel_id=/.test(requestPath) &&
+            !/^\/api\/(chapters|memories|characters)\/\d+$/.test(requestPath)
+        ) {
+            requestPath += (requestPath.includes("?") ? "&" : "?")
+                + `novel_id=${novelId}`;
+        } else if (
+            requestData &&
+            typeof requestData === "object" &&
+            !Array.isArray(requestData)
+        ) {
+            requestData = { ...requestData, novel_id: novelId };
+        }
+    }
 
     const timeoutMs = path.startsWith("/api/ai/") ? 60000 : 15000;
-    const canRetry = method === "GET" || method === "PUT" || method === "DELETE" || Boolean(idempotencyKey);
+    const canRetry =
+        method === "GET" ||
+        method === "PUT" ||
+        method === "DELETE" ||
+        Boolean(idempotencyKey);
+
     const maxAttempts = canRetry ? 2 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const controller = new AbortController();
         let timedOut = false;
-        const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+
+        const timer = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, timeoutMs);
+
         try {
-            const response = await fetch(API + path, {
+            const response = await fetch(API + requestPath, {
                 method,
-                headers,
-                body: data ? JSON.stringify(data) : undefined,
+                headers: {
+                    ...headers,
+                    ...(requestData ? { "Content-Type": "application/json" } : {})
+                },
+                body: requestData ? JSON.stringify(requestData) : undefined,
                 signal: controller.signal
             });
+
             clearTimeout(timer);
 
             let result = {};
-            try { result = await response.json(); } catch (e) {}
+
+            try {
+                result = await response.json();
+            } catch (e) {}
 
             if (!response.ok) {
-                const err = new Error(formatErrorDetail(result, response.status));
+                const err = new Error(
+                    formatErrorDetail(result, response.status)
+                );
+
                 err.status = response.status;
+
+                if (response.status === 401 && token) {
+                    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+                }
+
                 throw err;
             }
-            if ($("backendStatus")) $("backendStatus").textContent = "● Backend connected";
+
+            if ($("backendStatus")) {
+                $("backendStatus").textContent = "● Backend connected";
+            }
+
             return result;
+
         } catch (err) {
             clearTimeout(timer);
+
             if (err && err.status) throw err;
-            if (timedOut) throw new Error("Request timed out. Please check your connection and try again.");
+
+            if (timedOut) {
+                throw new Error(
+                    "Request timed out. Please check your connection and try again."
+                );
+            }
+
             const offline = navigator.onLine === false;
+
             if (!offline && attempt < maxAttempts) {
                 await new Promise(resolve => setTimeout(resolve, 200));
                 continue;
             }
-            if ($("backendStatus")) $("backendStatus").textContent = offline ? "○ Offline" : "○ Backend unavailable";
-            throw new Error(offline
-                ? "You appear to be offline. Check your connection and try again."
-                : "Network error — could not reach the server. Please try again.");
+
+            if ($("backendStatus")) {
+                $("backendStatus").textContent = offline
+                    ? "○ Offline"
+                    : "○ Backend unavailable";
+            }
+
+            throw new Error(
+                offline
+                    ? "You appear to be offline. Check your connection and try again."
+                    : "Network error — could not reach the server. Please try again."
+            );
         }
     }
 }
