@@ -190,6 +190,62 @@
 
                 </div>
 
+                <div class="card goal-card" id="goalCard">
+
+                    <div class="row goal-row">
+
+                        <div class="goal-copy">
+
+                            <h2>Your word-count goal</h2>
+
+                            <p id="goalStatus" role="status" aria-live="polite">
+                                Set a goal and watch the bar fill as you write.
+                            </p>
+
+                        </div>
+
+                        <div class="goal-controls">
+
+                            <label for="goalInput">Goal</label>
+
+                            <input
+                                id="goalInput"
+                                type="number"
+                                min="100"
+                                max="1000000"
+                                step="100"
+                                inputmode="numeric"
+                                placeholder="e.g. 50000"
+                            >
+
+                            <button class="ghost" id="saveGoalButton" type="button" onclick="saveGoal()">
+                                Set goal
+                            </button>
+
+                            <button class="ghost" id="clearGoalButton" type="button" onclick="clearGoal()" hidden>
+                                Clear
+                            </button>
+
+                        </div>
+
+                    </div>
+
+                    <div
+                        class="goal-bar"
+                        id="goalBar"
+                        role="progressbar"
+                        aria-labelledby="goalLabel"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >
+                        <span class="goal-bar-fill" id="goalBarFill"></span>
+                    </div>
+
+                    <p class="small goal-label" id="goalLabel">No goal set yet.</p>
+
+                </div>
+
                 <div class="section-head">
                     <h2>Your writing toolkit</h2>
                 </div>
@@ -251,6 +307,11 @@
                         Take your time. There's no rush to finish a good story.
                     </p>
 
+                    <p class="shortcut-hint" id="shortcutHint">
+                        Shortcut: <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>S</kbd> saves the chapter.
+                        On assistant pages, <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>Enter</kbd> runs the assistant.
+                    </p>
+
                     <input
                         id="chapterTitle"
                         aria-label="Chapter title"
@@ -295,6 +356,18 @@
 
                 <div class="section-head">
                     <h2>Saved chapters</h2>
+
+                    <div class="head-actions">
+
+                        <button class="ghost" id="exportManuscriptButton" type="button" onclick="exportManuscript()">
+                            Export manuscript (.md)
+                        </button>
+
+                        <button class="ghost" id="exportStoryBibleButton" type="button" onclick="exportStoryBible()">
+                            Export story bible (.md)
+                        </button>
+
+                    </div>
                 </div>
 
                 <div class="card" id="chapterList">
@@ -621,6 +694,10 @@
                 <h2 id="chapterModalTitle" style="flex:1">
                     Chapter
                 </h2>
+
+                <button class="edit-btn" id="editFromModalButton" type="button" onclick="editFromModal()">
+                    Edit chapter
+                </button>
 
                 <button class="ghost" id="closeChapterModal" onclick="closeChapterView()">
                     Close

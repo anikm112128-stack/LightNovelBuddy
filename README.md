@@ -82,6 +82,8 @@ AI suggestions are generated responses, not guaranteed facts. Authors should rev
 
 The dashboard brings the workspace together. It displays the current number of chapters, words, characters, and world entries, along with recently written chapters and a quick path into the editor. It is designed to make a growing project feel approachable rather than overwhelming.
 
+A word-count goal card lets you set a target between 100 and 1,000,000 words. The bar fills as you save chapters, reports how many words remain, and switches to a completed state once the goal is passed. The goal is stored in the browser, so it is per-browser rather than per-account.
+
 ### 2. Chapter editor and draft recovery
 
 ![Chapter editor showing a sample chapter in editing mode](screenshots/chapter-editor.png)
@@ -89,7 +91,10 @@ The dashboard brings the workspace together. It displays the current number of c
 - Write and title chapters with a live word count; save, view, edit, and delete saved chapters.
 - Recover an unsaved chapter draft from the same browser after a reload, and receive a warning before replacing unsaved work.
 - Keep newer typing if it is entered while a save is in progress; prevent repeated submissions while that save is pending.
-- Read saved chapters in a keyboard-accessible viewer.
+- Read saved chapters in a keyboard-accessible viewer, and jump from the viewer straight into editing that chapter.
+- Save with **Ctrl/Cmd + S**. On the assistant pages, **Ctrl/Cmd + Enter** runs the assistant. Both shortcuts are listed in the editor.
+
+**Exports:** *Export manuscript* downloads every saved chapter, oldest first, as a single Markdown file with a word count and chapter separators. *Export story bible* downloads the world entries (grouped by category), character profiles, and a chapter index as one reference document. Both are generated in the browser from data the API already returns; nothing extra is stored on the server.
 
 **Draft limitation:** Recovery is stored in the browser's local storage, not synced across devices. Clearing browser data can remove it, and tabs in the same browser share one draft slot. A saved chapter is stored in the backend database; a local draft is not a backup of that database.
 
@@ -123,7 +128,7 @@ The assistant offers ideas for the author to review; it does not automatically m
 | **Story Development** | Explores four potential next directions from a situation and an optional idea supplied by the author. |
 | **Character Development** | Analyses a submitted character and suggests ways to develop them using available story context. |
 
-The tools display responses for the author to consider; they do not automatically overwrite saved chapters. The interface also includes a collapsible mobile menu, labelled form controls, and a chapter viewer that can be closed with Escape.
+The tools display responses for the author to consider; they do not automatically overwrite saved chapters. Every response has **Copy** and **Insert into editor** actions: inserting appends the suggestion to the current draft as unsaved text, so nothing reaches the database until you save the chapter. The interface also includes a collapsible mobile menu, labelled form controls, and a chapter viewer that can be closed with Escape.
 
 ## How this fits the 50% MVP milestone
 

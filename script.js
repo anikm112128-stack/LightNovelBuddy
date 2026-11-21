@@ -118,6 +118,111 @@ function escapeHTML(value) {
     }[c]));
 }
 
+function wordCount(text) {
+    return String(text ?? "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function formatNumber(value) {
+    return Number(value ?? 0).toLocaleString();
+}
+
+/** Save text as a file, falling back to a new tab when downloads are blocked. */
+function downloadTextFile(filename, text, mime = "text/markdown;charset=utf-8") {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Give the browser a moment to start the download before releasing the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function safeFilename(value) {
+    const cleaned = String(value ?? "")
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80);
+    return cleaned || "light-novel-buddy";
+}
+
+// WORD-COUNT GOAL
+
+const GOAL_KEY = "lightNovelBuddy.wordGoal.v1";
+let currentWords = 0;
+
+function readGoal() {
+    try {
+        const raw = Number(localStorage.getItem(GOAL_KEY));
+        return Number.isFinite(raw) && raw >= 100 && raw <= 1000000 ? Math.floor(raw) : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+function renderGoal() {
+    const goal = readGoal();
+    const bar = $("goalBar");
+    const fill = $("goalBarFill");
+    const label = $("goalLabel");
+    if (!bar || !fill || !label) return;
+
+    $("saveGoalButton").textContent = goal ? "Update goal" : "Set goal";
+    $("clearGoalButton").hidden = !goal;
+
+    if (!goal) {
+        bar.setAttribute("aria-valuenow", "0");
+        fill.style.width = "0%";
+        label.textContent = "No goal set yet. " + formatNumber(currentWords) + " words written so far.";
+        $("goalStatus").textContent = "Set a goal and watch the bar fill as you write.";
+        return;
+    }
+
+    const percent = Math.min(100, Math.round((currentWords / goal) * 100));
+    bar.setAttribute("aria-valuenow", String(percent));
+    fill.style.width = percent + "%";
+    fill.classList.toggle("complete", currentWords >= goal);
+
+    const remaining = Math.max(0, goal - currentWords);
+    label.textContent = formatNumber(currentWords) + " of " + formatNumber(goal) + " words (" + percent + "%).";
+    $("goalStatus").textContent = currentWords >= goal
+        ? "Goal reached — " + formatNumber(currentWords) + " words written."
+        : formatNumber(remaining) + " words to go.";
+    $("goalInput").value = String(goal);
+}
+
+function saveGoal() {
+    const input = $("goalInput");
+    const goal = Math.floor(Number(input.value));
+    if (!Number.isFinite(goal) || goal < 100 || goal > 1000000) {
+        toast("Enter a goal between 100 and 1,000,000 words.");
+        return;
+    }
+    try {
+        localStorage.setItem(GOAL_KEY, String(goal));
+    } catch (error) {
+        toast("Could not save the goal in this browser.");
+        return;
+    }
+    renderGoal();
+    toast("Word goal set to " + formatNumber(goal) + " words.");
+}
+
+function clearGoal() {
+    try {
+        localStorage.removeItem(GOAL_KEY);
+    } catch (error) {
+        // Nothing persisted, so there is nothing to clear.
+    }
+    $("goalInput").value = "";
+    renderGoal();
+    toast("Word goal cleared.");
+}
+
 // PAGE NAVIGATION
 
 function setMobileMenu(open) {
@@ -255,16 +360,86 @@ $("chapterTitle").addEventListener("input", updateChapterDraft);
 $("chapterText").addEventListener("input", updateChapterDraft);
 restoreChapterDraft();
 
-// DASHBOARD
+// KEYBOARD SHORTCUTS
+//
+// The editor card carries a shortcut hint so the keys are discoverable.
+
+function isTypingTarget(element) {
+    if (!element) return false;
+    const tag = element.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || element.isContentEditable;
+}
+
+function saveChapterFromKeyboard() {
+    if ($("editor").classList.contains("active")) {
+        saveChapter();
+        return;
+    }
+    if (!chapterIsDirty()) {
+        toast("Nothing to save — open the Chapter Editor to start writing.");
+        return;
+    }
+    // The draft is already persisted to local storage, so switching pages is safe.
+    navigate("editor");
+    saveChapter();
+}
+
+/** Ctrl/Cmd + Enter runs the assistant for the page currently on screen. */
+const PAGE_ASSISTANT = {
+    grammar: { button: "runGrammarButton", run: () => runAI("grammar") },
+    consistency: { button: "runConsistencyButton", run: () => runAI("consistency") },
+    description: { button: "runDescriptionButton", run: () => runAI("enrich") },
+    story: { button: "runStoryButton", run: () => runAI("story") },
+    characters: { button: "runCharacterButton", run: runCharacterAnalysis }
+};
+
+function runAssistantFromKeyboard() {
+    const page = document.querySelector(".page.active");
+    const assistant = page && PAGE_ASSISTANT[page.id];
+    if (!assistant) {
+        toast("No assistant on this page. Open one from Writing Assistants first.");
+        return;
+    }
+    const button = $(assistant.button);
+    if (button && button.disabled) return;
+    assistant.run();
+}
+
+document.addEventListener("keydown", event => {
+    const modifier = event.ctrlKey || event.metaKey;
+    if (!modifier || event.altKey) return;
+
+    if (event.key === "Enter") {
+        // The chapter viewer handles its own keys; do not fire an assistant behind it.
+        if ($("chapterModal").classList.contains("open")) return;
+        event.preventDefault();
+        runAssistantFromKeyboard();
+        return;
+    }
+
+    if (event.key.toLowerCase() === "s") {
+        // Let the browser handle save-page inside a plain input that is not the editor,
+        // but always take over for chapter writing.
+        if (!$("editor").classList.contains("active") && isTypingTarget(event.target)
+            && event.target !== $("chapterTitle") && event.target !== $("chapterText")) {
+            return;
+        }
+        event.preventDefault();
+        saveChapterFromKeyboard();
+    }
+});
+
 
 async function loadDashboard() {
     try {
         const d = await request("/api/dashboard");
 
+        currentWords = Number(d.words ?? 0);
         $("chapterCount").textContent = d.chapters ?? 0;
-        $("wordCount").textContent = Number(d.words ?? 0).toLocaleString();
+        $("wordCount").textContent = formatNumber(d.words);
         $("characterCount").textContent = d.characters ?? 0;
         $("memoryCount").textContent = d.memories ?? 0;
+        renderGoal();
 
         const chapters = await request("/api/chapters");
 
@@ -396,9 +571,134 @@ async function editChapter(id) {
     }
 }
 
+// EXPORTS
+
+function timestampForFilename() {
+    const now = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+}
+
+function chapterHeadings(chapters) {
+    const numbered = chapters.length > 1 && chapters.every((c, i) => /^\s*(chapter|ch\.?)\s*\d+/i.test(c.title || ""));
+    return chapters.map((c, i) => {
+        const title = (c.title || "Untitled chapter").trim();
+        return numbered ? title : "Chapter " + (i + 1) + ": " + title;
+    });
+}
+
+async function exportManuscript() {
+    const btn = $("exportManuscriptButton");
+    if (btn && btn.disabled) return;
+    if (btn) btn.disabled = true;
+    try {
+        const chapters = await request("/api/chapters");
+        if (!chapters.length) {
+            toast("There are no saved chapters to export yet.");
+            return;
+        }
+
+        // The API returns newest first; a manuscript reads oldest first.
+        const ordered = [...chapters].reverse();
+        const headings = chapterHeadings(ordered);
+        const totalWords = ordered.reduce((sum, c) => sum + wordCount(c.content), 0);
+
+        const parts = [
+            "# Light Novel Buddy manuscript",
+            "",
+            "_Exported " + new Date().toLocaleString() + " — " +
+                ordered.length + " chapter" + (ordered.length === 1 ? "" : "s") + ", " +
+                formatNumber(totalWords) + " words._"
+        ];
+
+        ordered.forEach((chapter, i) => {
+            parts.push("", "---", "", "## " + headings[i], "");
+            const body = (chapter.content || "").trim();
+            parts.push(body || "_(This chapter is empty.)_");
+        });
+
+        downloadTextFile("manuscript-" + timestampForFilename() + ".md", parts.join("\n") + "\n");
+        toast("Manuscript exported — " + ordered.length + " chapters.");
+    } catch (e) {
+        toast("Could not export the manuscript: " + e.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function exportStoryBible() {
+    const btn = $("exportStoryBibleButton");
+    if (btn && btn.disabled) return;
+    if (btn) btn.disabled = true;
+    try {
+        const [memoriesData, charactersData, chapters] = await Promise.all([
+            request("/api/memories"),
+            request("/api/characters"),
+            request("/api/chapters")
+        ]);
+
+        if (!memoriesData.length && !charactersData.length && !chapters.length) {
+            toast("There is nothing to export yet.");
+            return;
+        }
+
+        const parts = ["# Story bible", "", "_Exported " + new Date().toLocaleString() + "_"];
+
+        parts.push("", "## World", "");
+        if (memoriesData.length) {
+            // Group by category so the export reads like a reference document.
+            const byCategory = new Map();
+            memoriesData.forEach(m => {
+                const category = (m.category || "General").trim();
+                if (!byCategory.has(category)) byCategory.set(category, []);
+                byCategory.get(category).push(m);
+            });
+            for (const [category, entries] of byCategory) {
+                parts.push("### " + category, "");
+                entries.forEach(m => {
+                    parts.push("**" + (m.name || "Untitled") + "**", "");
+                    parts.push((m.description || "").trim() || "_(No description.)_", "");
+                });
+            }
+        } else {
+            parts.push("_No world entries saved._", "");
+        }
+
+        parts.push("## Characters", "");
+        if (charactersData.length) {
+            charactersData.forEach(c => {
+                parts.push("### " + (c.name || "Unnamed character"), "");
+                if ((c.personality || "").trim()) parts.push("*Personality:* " + c.personality.trim(), "");
+                parts.push((c.description || "").trim() || "_(No details.)_", "");
+            });
+        } else {
+            parts.push("_No characters saved._", "");
+        }
+
+        parts.push("## Chapter index", "");
+        if (chapters.length) {
+            const ordered = [...chapters].reverse();
+            const headings = chapterHeadings(ordered);
+            ordered.forEach((chapter, i) => {
+                parts.push("- **" + headings[i] + "** — " + formatNumber(wordCount(chapter.content)) + " words");
+            });
+        } else {
+            parts.push("_No chapters saved._");
+        }
+
+        downloadTextFile("story-bible-" + timestampForFilename() + ".md", parts.join("\n") + "\n");
+        toast("Story bible exported.");
+    } catch (e) {
+        toast("Could not export the story bible: " + e.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // CHAPTER VIEWING
 
 let chapterModalPreviousFocus = null;
+let chapterModalId = null;
 
 async function viewChapter(id) {
     try {
@@ -410,6 +710,7 @@ async function viewChapter(id) {
         $("chapterModalContent").textContent =
             c.content || "(This chapter is empty.)";
 
+        chapterModalId = c.id;
         chapterModalPreviousFocus = document.activeElement;
         if ($("appRoot")) $("appRoot").inert = true;
         $("chapterModal").classList.add("open");
@@ -425,12 +726,23 @@ function closeChapterView() {
     if ($("appRoot")) $("appRoot").inert = false;
     if (chapterModalPreviousFocus && chapterModalPreviousFocus.isConnected) chapterModalPreviousFocus.focus();
     chapterModalPreviousFocus = null;
+    chapterModalId = null;
+}
+
+/** Jump from the read-only viewer straight into the editor for the same chapter. */
+function editFromModal() {
+    if (chapterModalId === null) return;
+    const id = chapterModalId;
+    closeChapterView();
+    // closeChapterView restores focus to the row that opened the modal; moving on
+    // to the editor afterwards keeps that restore harmless and predictable.
+    editChapter(id);
 }
 document.addEventListener("keydown", event => {
     if ($("chapterModal").classList.contains("open")) {
         if (event.key === "Escape") { event.preventDefault(); closeChapterView(); return; }
         if (event.key === "Tab") {
-            const focusable = [$("closeChapterModal"), $("chapterModalContent")].filter(Boolean);
+            const focusable = [$("editFromModalButton"), $("closeChapterModal"), $("chapterModalContent")].filter(Boolean);
             const idx = focusable.indexOf(document.activeElement);
             event.preventDefault();
             focusable[(idx + (event.shiftKey ? focusable.length - 1 : 1)) % focusable.length].focus();
@@ -823,10 +1135,7 @@ async function runAI(feature) {
             }
         );
 
-        out.innerHTML =
-            '<div class="result">' +
-            escapeHTML(result.result || "No result returned.") +
-            '</div>';
+        renderAIResult(out, result.result);
 
     } catch (e) {
 
@@ -838,6 +1147,100 @@ async function runAI(feature) {
     } finally {
         if (btn) btn.disabled = false;
     }
+}
+
+// AI RESULT ACTIONS
+
+/**
+ * Render an AI response with actions for moving it into the author's own draft.
+ * Text stays in textContent so nothing from the model is ever parsed as markup.
+ */
+function renderAIResult(container, text) {
+    container.innerHTML = "";
+
+    const value = String(text ?? "").trim() || "No result returned.";
+
+    const box = document.createElement("div");
+    box.className = "result";
+
+    const body = document.createElement("div");
+    body.className = "result-text";
+    body.textContent = value;
+
+    const actions = document.createElement("div");
+    actions.className = "result-actions";
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "ghost";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", () => copyText(value, copy));
+
+    const insert = document.createElement("button");
+    insert.type = "button";
+    insert.className = "ghost";
+    insert.textContent = "Insert into editor";
+    insert.addEventListener("click", () => insertIntoEditor(value, insert));
+
+    actions.append(copy, insert);
+    box.append(body, actions);
+    container.appendChild(box);
+}
+
+async function copyText(value, button) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(value);
+        } else {
+            // Fallback for non-secure contexts, where the async clipboard API is unavailable.
+            const helper = document.createElement("textarea");
+            helper.value = value;
+            helper.setAttribute("readonly", "");
+            helper.style.position = "fixed";
+            helper.style.top = "-1000px";
+            document.body.appendChild(helper);
+            helper.select();
+            const copied = document.execCommand("copy");
+            helper.remove();
+            if (!copied) throw new Error("Copy was blocked by the browser.");
+        }
+        if (button) {
+            const original = button.textContent;
+            button.textContent = "Copied";
+            setTimeout(() => { button.textContent = original; }, 2000);
+        }
+        toast("Copied to clipboard.");
+    } catch (error) {
+        toast("Could not copy: " + error.message);
+    }
+}
+
+function insertIntoEditor(value, button) {
+    const target = $("chapterText");
+    if (!target) return;
+
+    if (chapterIsDirty() || target.value.trim()) {
+        const proceed = confirm("Add this suggestion to the chapter editor? Your current draft text is kept and the suggestion is appended.");
+        if (!proceed) return;
+    }
+
+    // Append rather than replace: the assistant's output is a suggestion, and the
+    // author's existing words must survive by default.
+    const existing = target.value.replace(/\s+$/, "");
+    const separator = existing ? "\n\n" : "";
+    target.value = existing + separator + value;
+
+    navigate("editor");
+    updateChapterDraft();
+    target.focus();
+    target.setSelectionRange(target.value.length, target.value.length);
+
+    if (button) {
+        const original = button.textContent;
+        button.textContent = "Inserted";
+        setTimeout(() => { button.textContent = original; }, 2000);
+    }
+    toast("Suggestion added to the editor. Nothing is saved until you save the chapter.");
 }
 
 // CHARACTER AI ANALYSIS
@@ -865,10 +1268,7 @@ async function runCharacterAnalysis() {
             { text }
         );
 
-        $("characterResult").innerHTML =
-            '<div class="result">' +
-            escapeHTML(result.result || "No result returned.") +
-            '</div>';
+        renderAIResult($("characterResult"), result.result);
 
     } catch (e) {
 
@@ -892,6 +1292,8 @@ window.addEventListener("online", () => {
 // APPLICATION STARTUP
 
 async function initialise() {
+
+    renderGoal();
 
     try {
 
