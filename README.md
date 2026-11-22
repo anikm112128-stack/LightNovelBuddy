@@ -9,7 +9,7 @@ Built to support the author’s imagination—not take it over.
 
 [![Live app](https://img.shields.io/badge/Live%20App-Visit%20the%20Studio-526B58?style=for-the-badge)](https://lightnovelbuddyf.onrender.com/)
 [![Render API](https://img.shields.io/badge/Render%20API-Explore%20the%20Backend-34483D?style=for-the-badge)](https://lightnovelbuddy.onrender.com/)
-[![MVP walkthrough](https://img.shields.io/badge/YouTube-50%25%20MVP%20Walkthrough-BA5147?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=BRy7R7-objw)
+
 
 ![HTML](https://img.shields.io/badge/HTML-5-E34F26?style=flat-square&logo=html5&logoColor=white)
 ![CSS](https://img.shields.io/badge/CSS-3-1572B6?style=flat-square&logo=css3&logoColor=white)
