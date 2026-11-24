@@ -7,7 +7,7 @@
 A personal writing studio for building fictional worlds, developing characters, and exploring stories with AI assistance.<br>
 Built to support the author's imagination — not take it over.
 
-> 🏆 **Top 10 Finalist** — Light Novel Buddy finished in the **top 10 of 250 teams** (1,500+ participants) at the hackathon.
+> 🏆 **Top 10 Finalist** — Light Novel Buddy finished in the **top 10 of 250 teams** (1,500+ participants) at the GeNarrative Clash 2026 hackathon hosted by TIU
 
 [![Top 10 Finalist](https://img.shields.io/badge/Top%2010%20Finalist-Hackathon-FFD700?style=for-the-badge)](https://github.com/ramrounakmukherjee-blip/LightNovelBuddy)
 [![250 teams](https://img.shields.io/badge/250%20teams%2C%201500%2B%20participants-172820?style=for-the-badge)](https://github.com/ramrounakmukherjee-blip/LightNovelBuddy)
@@ -442,7 +442,7 @@ Light Novel Buddy is a complete writing studio, not a demonstration of one. A wo
 
 ### Recognition
 
-The project finished in the **top 10 of 250 teams (1,500+ participants)** at the hackathon. That result reflects the shift this build represents: from a promising idea about AI-assisted storytelling to a working product with private accounts, multi-novel workspaces, retrieval-grounded AI, and 47 automated tests behind it.
+The project finished in the **top 10 of 250 teams (1,500+ participants)** at the GeNarrative Clash 2026 hackathon hosted by TIU. That result reflects the shift this build represents: from a promising idea about AI-assisted storytelling to a working product with private accounts, multi-novel workspaces, retrieval-grounded AI, and 47 automated tests behind it.
 
 ### Who it helps, and how
 
